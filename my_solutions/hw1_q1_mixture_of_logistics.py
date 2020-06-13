@@ -51,8 +51,11 @@ class MixtureOfLogisticsModel(torch.nn.Module):
         self.s = torch.nn.Parameter(torch.zeros((self.mixture_size, 1)))
 
         # torch.nn.init.normal_(self.pi.data)
-        torch.nn.init.normal_(self.mu.data, self.d)
-        torch.nn.init.normal_(self.s.data, np.sqrt(self.d))
+        # torch.nn.init.normal_(self.mu.data, self.d)
+        # torch.nn.init.normal_(self.s.data, np.sqrt(self.d))
+
+        torch.nn.init.ones_(self.s)
+        torch.nn.init.uniform_(self.mu, 0, self.d)
 
         self.pis = []
         self.mus = []
@@ -74,7 +77,7 @@ class MixtureOfLogisticsModel(torch.nn.Module):
 
         res = positive - negative
 
-        # res = res + eps
+        res = res + eps
         # res = F.normalize(res + eps, p=1)
         # print(res.detach().numpy().max())
         # print(model.s.data.detach().flatten().numpy())
@@ -89,6 +92,16 @@ class MixtureOfLogisticsModel(torch.nn.Module):
         self.ss.append(self.s.detach().numpy().copy())
 
         return res.log()
+
+    def get_mixture_params(self):
+        with torch.no_grad():
+            s = self.s ** 2
+            mu = self.mu
+
+            s = s.detach().squeeze().numpy()
+            mu = mu.detach().squeeze().numpy()
+
+            return list(zip(s, mu))
 
     def get__mixture_componets(self):
         with torch.no_grad():
@@ -133,13 +146,15 @@ class MixtureOfLogisticsModel(torch.nn.Module):
 def visualaize_components(model: MixtureOfLogisticsModel):
     thetas = model.get__mixture_componets()
     coefs = model.get_mixture_coefficients()
+    params = model.get_mixture_params()
 
     for i in range(model.mixture_size):
         theta = thetas[i, :]
         c = coefs[i]
-        sample = sample_from_distribution(model.d, 10000, theta)
+        s, mu = params[i]
+        sample = sample_from_distribution(10000, theta)
         plt.figure()
-        plt.title(f"Component #{i}, weight={c:.4f}")
+        plt.title(f"Component #{i}, s={s:.3f}, mu={mu:.3f}, weight={c:.4f}, d={model.d}")
         plt.hist(sample, 100)
 
 
@@ -194,8 +209,8 @@ def train_loop(model, train_data, test_data, epochs=10, batch_size=64):
     return losses, test_losses, model.get_distribution()
 
 
-def sample_from_distribution(d, sz, theta):
-    return np.random.choice(range(d), sz, p=theta)
+def sample_from_distribution(sz, theta):
+    return np.random.choice(range(len(theta)), sz, p=theta)
 
 
 def visualize_params(pp):
@@ -231,7 +246,7 @@ def q1_b(train_data, test_data, d, dset_id):
     model = MixtureOfLogisticsModel(d, mixture_size=mixture_size)
     losses, test_losses, theta = train_loop(model,
                                             train_data, test_data,
-                                            epochs=1000, batch_size=batch_size)
+                                            epochs=200, batch_size=batch_size)
 
     blja = losses, test_losses, theta
     return losses, test_losses, theta
@@ -287,6 +302,35 @@ def cross_entropy(a, b):
     return res
 
 
+def quazy_logistic_density(s, mu, d):
+    positive = torch.arange(d).float() + 0.5
+    positive[d - 1] = 10 ** 7
+    positive = (positive - mu) / s
+    positive = F.sigmoid(positive)
+
+    negative = torch.arange(d).float() - 0.5
+    negative[0] = -10 ** 7
+    negative = (negative - mu) / s
+    negative = F.sigmoid(negative)
+
+    res = positive - negative
+
+    return res.numpy()
+
+
+def sample_from_quazy_logistic(s, mu, d, sz=10_000):
+    theta = quazy_logistic_density(s, mu, d)
+    return sample_from_distribution(sz, theta)
+
+
+def visualize_quazy_logistic(s, mu, d, sz=10_000):
+    sample = sample_from_quazy_logistic(s, mu, d, sz=sz)
+    plt.figure()
+    plt.hist(sample, 100)
+    plt.title(f'Hist for s={s:.3f},mu={mu:.3f},  d={d}')
+    plt.show()
+
+
 if __name__ == '__main__':
     seed_everything(0)
 
@@ -313,7 +357,7 @@ if __name__ == '__main__':
     # losses, test_losses, theta = q1_b(train_data, test_data, d, 1)
     losses, test_losses, theta = train_loop(model,
                                             train_data, test_data,
-                                            epochs=300, batch_size=64)
+                                            epochs=200, batch_size=64)
     tt = model.get__mixture_componets()
 
     plt.figure()
@@ -334,7 +378,7 @@ if __name__ == '__main__':
     plt.title('Real distribution')
     plt.show()
 
-    sample = sample_from_distribution(d, 10000, theta)
+    sample = sample_from_distribution(10000, theta)
     plt.figure()
     plt.title('Trained distribution')
     plt.hist(sample, 50)
