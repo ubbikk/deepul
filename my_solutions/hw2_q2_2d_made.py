@@ -1,16 +1,9 @@
-from collections import Counter
-
-import torch
-from torch.nn.modules.loss import CrossEntropyLoss, NLLLoss
+from torch.nn.modules.loss import CrossEntropyLoss
 from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader
-import torch.nn.functional as F
-import numpy as np
-import matplotlib.pyplot as plt
 from tqdm import tqdm
-from torch.optim.lr_scheduler import LambdaLR
+
 from deepul.hw1_helper import *
-from torchviz import make_dot
 
 
 # make_dot(r).render("attached", format="png")
@@ -28,7 +21,7 @@ class PairsDataset(Dataset):
 
 
 class Made2D(torch.nn.Module):
-    def __init__(self, d, emb_dim=10, hidden_dim=10):
+    def __init__(self, d, emb_dim=50, hidden_dim=50):
         super().__init__()
         self.d = d
         self.emb_dim = emb_dim
@@ -51,6 +44,9 @@ class Made2D(torch.nn.Module):
         self.h_mask = torch.zeros((hidden_dim, 2 * emb_dim))
         self.out0_mask = torch.zeros((d, hidden_dim))
         # self.out1_mask = torch.zeros((d, hidden_dim))
+        if torch.cuda.is_available():
+            self.h_mask = self.h_mask.cuda()
+            self.out0_mask = self.out0_mask.cuda()
 
         self.h_mask[hidden_dim // 2:, :emb_dim] = 1
         self.out0_mask[:, :hidden_dim // 2] = 1
@@ -60,16 +56,21 @@ class Made2D(torch.nn.Module):
     def get_distribution(self):
         with torch.no_grad():
             inp = torch.cartesian_prod(torch.arange(self.d), torch.arange(self.d))
+            inp = inp.cuda()
             s0, s10 = self.get_scores([inp])
 
             p0 = F.softmax(s0, dim=1)
             p10 = F.softmax(s10, dim=1)
 
             i0 = inp[:, 0]
-            p0 = p0[torch.arange(p0.shape[0]), i0]
-            p10 = p10[torch.arange(p10.shape[0]), i0]
+            i1 = inp[:, 1]
+            pt0 = p0[torch.arange(p0.shape[0]), i0]
+            pt10 = p10[torch.arange(p10.shape[0]), i1]
 
-            return p0 * p10
+            res = pt0 * pt10
+            res = res.reshape((self.d, self.d))
+
+            return res.cpu().numpy()
 
     def forward(self, *input):
         target = input[0]
@@ -101,7 +102,7 @@ class Made2D(torch.nn.Module):
         return out0, out1
 
 
-def sample_data(dset_type):
+def sample_data_copy(dset_type):
     data_dir = get_data_dir(1)
     # n=dataset sise (80/20)
     # d = dimension i.e. picture is d x d, so emb matrices are going be d x E
@@ -128,7 +129,17 @@ def sample_data(dset_type):
     return train_dist, test_dist, train_data, test_data
 
 
-def train_loop(model, train_data, test_data, epochs=100, batch_size=64):
+def to_cuda(batch, cuda):
+    if not cuda:
+        return batch
+
+    if isinstance(batch, torch.Tensor):
+        return batch.cuda()
+
+    return [b.cuda() for b in batch]
+
+
+def train_loop(model, train_data, test_data, cuda, epochs=100, batch_size=64):
     opt = Adam(model.parameters(), lr=1e-3)
 
     train_ds = PairsDataset(train_data)
@@ -141,12 +152,13 @@ def train_loop(model, train_data, test_data, epochs=100, batch_size=64):
     test_losses = []
     for e in tqdm(range(epochs)):
         for b in train_loader:
+            b = to_cuda(b, cuda)
             loss = model(b)
             # loss += (-model.s.flatten()).relu().sum()
             loss.backward()
             # print(get_grad_norm(model))
             opt.step()
-            losses.append(loss.detach().numpy().item())
+            losses.append(loss.detach().cpu().numpy().item())
 
             opt.zero_grad()
 
@@ -156,13 +168,14 @@ def train_loop(model, train_data, test_data, epochs=100, batch_size=64):
         with torch.no_grad():
             tmp = []
             for b in test_loader:
+                b = to_cuda(b, cuda)
                 loss = model(b)
-                tmp.append(loss.numpy())
+                tmp.append(loss.cpu().numpy())
 
             test_losses.append(np.mean(tmp))
             print(test_losses[-1])
 
-    return losses, test_losses
+    return losses, test_losses, model.get_distribution()
 
 
 def q2_a(train_data, test_data, d, dset_id):
@@ -178,8 +191,14 @@ def q2_a(train_data, test_data, d, dset_id):
     - a (# of epochs + 1,) numpy array of test_losses evaluated once at initialization and after each epoch
     - a numpy array of size (d, d) of probabilities (the learned joint distribution)
     """
+    cuda = torch.cuda.is_available()
+    print(f'CUDA is {cuda}')
+    model = Made2D(d)
+    if cuda:
+        model.cuda()
+    losses, test_losses, distribution = train_loop(model, train_data, test_data, cuda, epochs=200)
 
-    """ YOUR CODE HERE """
+    return losses, test_losses, distribution
 
 
 if __name__ == '__main__':
@@ -187,7 +206,7 @@ if __name__ == '__main__':
 
     d = 25
     batch_size = 64
-    train_dist, test_dist, train_data, test_data = sample_data(1)
+    train_dist, test_dist, train_data, test_data = sample_data_copy(1)
     # train_ds = PairsDataset(train_data)
     # test_ds = PairsDataset(test_data)
     #
@@ -205,5 +224,4 @@ if __name__ == '__main__':
 
     model = Made2D(d)
 
-    losses, test_losses = train_loop(model, train_data, test_data, epochs=2)
-    distribution = model.get_distribution()
+    losses, test_losses, distribution = train_loop(model, train_data, test_data, epochs=200)
