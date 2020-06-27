@@ -94,14 +94,18 @@ class Made2D(torch.nn.Module):
         x0 = self.emb1(x0)
         x1 = self.emb2(x1)
         x = torch.cat([x0, x1], dim=-1)
-        x = ((self.h * self.h_mask) @ x.T).T
-        x = F.relu(x)
+
+        h0 = ((self.h * self.h_mask) @ x.T).T
+        h0 = F.relu(h0)
+
+        h1 = (self.h @ x.T).T
+        h1 = F.relu(h1)
 
         out0 = (self.out0 * self.out0_mask)
-        out0 = (out0 @ x.T).T
+        out0 = (out0 @ h0.T).T
         out0 = out0 + self.out0_bias
 
-        out1 = (self.out1 @ x.T).T
+        out1 = (self.out1 @ h1.T).T
         out1 = out1 + self.out1_bias
 
         return out0, out1
@@ -184,6 +188,7 @@ def train_loop(model, train_data, test_data, cuda, epochs=100, batch_size=64):
 
     return losses, test_losses, model.get_distribution()
 
+
 model = None
 losses, test_losses, distribution = None, None, None
 
@@ -215,7 +220,7 @@ def q2_a(train_data, test_data, d, dset_id):
 if __name__ == '__main__':
     # visualize_q2a_data(dset_type=1)
 
-    dset=1
+    dset = 1
     d = 25
     batch_size = 64
     train_dist, test_dist, train_data, test_data = sample_data_copy(dset)
