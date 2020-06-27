@@ -21,13 +21,14 @@ class PairsDataset(Dataset):
 
 
 class Made2D(torch.nn.Module):
-    def __init__(self, d, emb_dim=50, hidden_dim=50):
+    def __init__(self, d, emb_dim=25, hidden_dim=50):
         super().__init__()
         self.d = d
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
 
-        self.emb = torch.nn.Embedding(d, embedding_dim=emb_dim)
+        self.emb1 = torch.nn.Embedding(d, embedding_dim=emb_dim)
+        self.emb2 = torch.nn.Embedding(d, embedding_dim=emb_dim)
 
         self.h = torch.nn.Parameter(torch.zeros(hidden_dim, 2 * emb_dim))
         self.out0 = torch.nn.Parameter(torch.zeros(d, hidden_dim))
@@ -54,9 +55,11 @@ class Made2D(torch.nn.Module):
         self.criterion = CrossEntropyLoss()
 
     def get_distribution(self):
+        self.eval()
         with torch.no_grad():
             inp = torch.cartesian_prod(torch.arange(self.d), torch.arange(self.d))
-            inp = inp.cuda()
+            if torch.cuda.is_available():
+                inp = inp.cuda()
             s0, s10 = self.get_scores([inp])
 
             p0 = F.softmax(s0, dim=1)
@@ -88,13 +91,15 @@ class Made2D(torch.nn.Module):
         x = input[0]
         x0 = x[:, 0]
         x1 = x[:, 1]
-        x0 = self.emb(x0)
-        x1 = self.emb(x1)
+        x0 = self.emb1(x0)
+        x1 = self.emb2(x1)
         x = torch.cat([x0, x1], dim=-1)
         x = ((self.h * self.h_mask) @ x.T).T
         x = F.relu(x)
-        out0 = ((self.out0 * self.out0_mask) @ x.T).T
-        out0 = out0 + self.out1_bias
+
+        out0 = (self.out0 * self.out0_mask)
+        out0 = (out0 @ x.T).T
+        out0 = out0 + self.out0_bias
 
         out1 = (self.out1 @ x.T).T
         out1 = out1 + self.out1_bias
@@ -151,6 +156,8 @@ def train_loop(model, train_data, test_data, cuda, epochs=100, batch_size=64):
     losses = []
     test_losses = []
     for e in tqdm(range(epochs)):
+        for k, v in model.named_parameters():
+            print(k, v.abs().max())
         for b in train_loader:
             b = to_cuda(b, cuda)
             loss = model(b)
@@ -177,8 +184,12 @@ def train_loop(model, train_data, test_data, cuda, epochs=100, batch_size=64):
 
     return losses, test_losses, model.get_distribution()
 
+model = None
+losses, test_losses, distribution = None, None, None
+
 
 def q2_a(train_data, test_data, d, dset_id):
+    global model, losses, test_losses, distribution
     """
     train_data: An (n_train, 2) numpy array of integers in {0, ..., d-1}
     test_data: An (n_test, 2) numpy array of integers in {0, .., d-1}
@@ -196,7 +207,7 @@ def q2_a(train_data, test_data, d, dset_id):
     model = Made2D(d)
     if cuda:
         model.cuda()
-    losses, test_losses, distribution = train_loop(model, train_data, test_data, cuda, epochs=200)
+    losses, test_losses, distribution = train_loop(model, train_data, test_data, cuda, epochs=10, batch_size=512)
 
     return losses, test_losses, distribution
 
@@ -204,9 +215,16 @@ def q2_a(train_data, test_data, d, dset_id):
 if __name__ == '__main__':
     # visualize_q2a_data(dset_type=1)
 
+    dset=1
     d = 25
     batch_size = 64
-    train_dist, test_dist, train_data, test_data = sample_data_copy(1)
+    train_dist, test_dist, train_data, test_data = sample_data_copy(dset)
+
+    # dset=2
+    # d = 200
+    # batch_size = 64
+    # train_dist, test_dist, train_data, test_data = sample_data_copy(dset)
+
     # train_ds = PairsDataset(train_data)
     # test_ds = PairsDataset(test_data)
     #
@@ -222,6 +240,12 @@ if __name__ == '__main__':
     #
     # res = (h @ x.T).T
 
-    model = Made2D(d)
+    # model = Made2D(d)
+    #
+    # losses, test_losses, distribution = train_loop(model, train_data, test_data, False, epochs=50)
+    # q2_a(train_data, test_data, d, 1)
+    q2_save_results(dset, 'a', q2_a)
+    visualize_q2a_data(dset)
 
-    losses, test_losses, distribution = train_loop(model, train_data, test_data, epochs=200)
+    # 3.1980457 3.1819618
+    # 5.294696
