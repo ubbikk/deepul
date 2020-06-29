@@ -6,9 +6,6 @@ from tqdm import tqdm
 from deepul.hw1_helper import *
 
 
-# make_dot(r).render("attached", format="png")
-
-
 class PairsDataset(Dataset):
     def __init__(self, data):
         self.data = data
@@ -36,11 +33,17 @@ class Made2D(torch.nn.Module):
         self.out1 = torch.nn.Parameter(torch.zeros(d, hidden_dim))
         self.out1_bias = torch.nn.Parameter(torch.zeros(d, ))
 
-        torch.nn.init.normal_(self.h.data)
-        torch.nn.init.normal_(self.out0.data)
-        torch.nn.init.normal_(self.out1.data)
+        torch.nn.init.xavier_uniform(self.h.data)
+        torch.nn.init.xavier_uniform(self.out0.data)
+        torch.nn.init.xavier_uniform(self.out1.data)
         torch.nn.init.normal_(self.out0_bias.data)
         torch.nn.init.normal_(self.out1_bias.data)
+
+        # torch.nn.init.normal_(self.h.data)
+        # torch.nn.init.normal_(self.out0.data)
+        # torch.nn.init.normal_(self.out1.data)
+        # torch.nn.init.normal_(self.out0_bias.data)
+        # torch.nn.init.normal_(self.out1_bias.data)
 
         self.h_mask = torch.zeros((hidden_dim, 2 * emb_dim))
         self.out0_mask = torch.zeros((d, hidden_dim))
@@ -94,18 +97,14 @@ class Made2D(torch.nn.Module):
         x0 = self.emb1(x0)
         x1 = self.emb2(x1)
         x = torch.cat([x0, x1], dim=-1)
-
-        h0 = ((self.h * self.h_mask) @ x.T).T
-        h0 = F.relu(h0)
-
-        h1 = (self.h @ x.T).T
-        h1 = F.relu(h1)
+        x = ((self.h * self.h_mask) @ x.T).T
+        x = F.relu(x)
 
         out0 = (self.out0 * self.out0_mask)
-        out0 = (out0 @ h0.T).T
+        out0 = (out0 @ x.T).T
         out0 = out0 + self.out0_bias
 
-        out1 = (self.out1 @ h1.T).T
+        out1 = (self.out1 @ x.T).T
         out1 = out1 + self.out1_bias
 
         return out0, out1
@@ -160,8 +159,8 @@ def train_loop(model, train_data, test_data, cuda, epochs=100, batch_size=64):
     losses = []
     test_losses = []
     for e in tqdm(range(epochs)):
-        for k, v in model.named_parameters():
-            print(k, v.abs().max())
+        # for k, v in model.named_parameters():
+        #     print(k, v.abs().mean())
         for b in train_loader:
             b = to_cuda(b, cuda)
             loss = model(b)
@@ -212,7 +211,7 @@ def q2_a(train_data, test_data, d, dset_id):
     model = Made2D(d)
     if cuda:
         model.cuda()
-    losses, test_losses, distribution = train_loop(model, train_data, test_data, cuda, epochs=10, batch_size=512)
+    losses, test_losses, distribution = train_loop(model, train_data, test_data, cuda, epochs=200, batch_size=512)
 
     return losses, test_losses, distribution
 
@@ -254,3 +253,11 @@ if __name__ == '__main__':
 
     # 3.1980457 3.1819618
     # 5.294696
+    # out0, out1, emb2 - aren't learned
+
+    # train_ds = PairsDataset(train_data)
+    # from torchviz import make_dot
+    #
+    # inp = list(DataLoader(train_ds, batch_size=batch_size, shuffle=True))[0]
+    # params = dict(model.named_parameters()).render("attached", format="png")
+    # make_dot(model(inp), params=params)
