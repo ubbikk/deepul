@@ -1,6 +1,7 @@
 import os
 
 from torch import Tensor
+from torch.nn import BCELoss
 from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
@@ -15,13 +16,26 @@ CUDA = torch.cuda.is_available()
 
 class MnistDataset(Dataset):
     def __init__(self, data):
-        self.data = data.squeeze()
+        self.data = data.transpose(0, 3, 1, 2)
 
     def __getitem__(self, item):
         return self.data[item]
 
     def __len__(self):
         return len(self.data)
+
+
+def sample_from_bernulli_distr(p):
+    return np.random.binomial(1, p, 1).item()
+
+
+def get_conv_mask(sz, type='A'):
+    res = np.ones(sz * sz)
+    if type == 'A':
+        res[sz * sz // 2:] = 0
+    else:
+        res[1 + sz * sz // 2:] = 0
+    return torch.from_numpy(res.reshape(sz, sz)).float()
 
 
 class MaskedConv2D(torch.nn.Conv2d):
@@ -37,7 +51,9 @@ class MaskedConv2D(torch.nn.Conv2d):
                          bias=bias,
                          padding_mode=padding_mode)
 
-        self.register_buffer('mask', mask.reshape(1, in_channels, *kernel_size))
+        mask = mask.reshape(1, 1, *kernel_size)
+        mask = mask.repeat(1, in_channels, 1, 1)
+        self.register_buffer('mask', mask)
 
     def forward(self, input: Tensor) -> Tensor:
         return F.conv2d(input, self.weight * self.mask, self.bias, self.stride,
@@ -45,14 +61,69 @@ class MaskedConv2D(torch.nn.Conv2d):
 
 
 class PixelCNN(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, H, W):
         super().__init__()
         self.H = H
         self.W = W
-        self.d = H * W
+        maskA = get_conv_mask(7, 'A')
+        convA = MaskedConv2D(maskA, in_channels=1, out_channels=64,
+                             kernel_size=(7, 7), padding=3)
+        maskB = get_conv_mask(7, 'B')
+        convsB = [MaskedConv2D(maskB, in_channels=64, out_channels=64, kernel_size=(7, 7), padding=3) for i in
+                  range(5)]
+        conv1D1 = torch.nn.Conv2d(in_channels=64, out_channels=64, kernel_size=1)
+        conv1D2 = torch.nn.Conv2d(in_channels=64, out_channels=1, kernel_size=1)
+        convs = [convA] + convsB + [conv1D1, conv1D2]
+
+        self.convs = torch.nn.ModuleList(convs)
+        self.criterion = BCELoss(reduction='none')
 
     def forward(self, *input):
-        pass
+        x = input[0]
+
+        b, c, H, W = x.shape
+        # x = x.float()
+        target = x.reshape(b * c * H * W).detach()
+        probs = self.get_probs(input)
+
+        loss = self.criterion(probs, target)
+
+        return loss
+
+    def get_probs(self, input):
+        x = input[0]
+        b, c, H, W = x.shape
+
+        for conv in self.convs[:-1]:
+            # print(x.shape)
+            x = conv(x)
+            # print(x.shape)
+            # print('========================')
+            x = F.relu(x)
+        last_conv = self.convs[-1]
+        x = last_conv(x)
+
+        x = x.reshape(b * c * H * W)
+        probs = F.sigmoid(x)
+        return probs
+
+    def generate_examples(self, sz=100):
+        self.eval()
+        with torch.no_grad():
+            inp = torch.zeros((sz, self.H, self.W), dtype=torch.float)
+            inp = to_cuda(inp)
+            self.pp = torch.zeros((sz, self.H, self.W), dtype=torch.float)
+
+            for pos in range(self.H * self.W):
+                probs = self.get_probs([inp.reshape(sz, 1, self.H, self.W)]).reshape(sz, self.H, self.W).cpu()
+                i = pos // self.H
+                j = pos % self.H
+                for b in range(sz):
+                    p = probs[b, i, j].numpy().item()
+                    inp[b, i, j] = sample_from_bernulli_distr(p)
+                    self.pp[b, i, j] = p
+
+            return inp.reshape((sz, self.H, self.W, 1)).cpu().numpy()
 
 
 def to_cuda(batch):
@@ -65,7 +136,7 @@ def to_cuda(batch):
     return [b.cuda() for b in batch]
 
 
-def train_loop(model, train_data, test_data, epochs=100, batch_size=64):
+def train_loop(model, train_data, test_data, epochs=10, batch_size=128):
     opt = Adam(model.parameters(), lr=1e-3)
 
     train_ds = MnistDataset(train_data)
@@ -110,6 +181,7 @@ losses, test_losses, distribution = None, None, None
 
 
 def q3_a(train_data, test_data, image_shape, dset_id):
+    global model, losses, test_losses, examples
     """
     train_data: A (n_train, H, W, 1) uint8 numpy array of binary images with values in {0, 1}
     test_data: A (n_test, H, W, 1) uint8 numpy array of binary images with values in {0, 1}
@@ -128,7 +200,7 @@ def q3_a(train_data, test_data, image_shape, dset_id):
     model = PixelCNN(H, W)
     if CUDA:
         model.cuda()
-    losses, test_losses, examples = train_loop(model, train_data, test_data, epochs=20, batch_size=64)
+    losses, test_losses, examples = train_loop(model, train_data, test_data, epochs=10, batch_size=128)
 
     return losses, test_losses, examples
 
@@ -139,6 +211,7 @@ if __name__ == '__main__':
     fp = '/home/ubik/projects/deepul/homeworks/hw1/data/hw1_data/shapes.pkl'
     H, W = 20, 20
     train_data, test_data = load_pickled_data(fp)
+
     dset = 1
 
     # fp = '/home/ubik/projects/deepul/homeworks/hw1/data/hw1_data/mnist.pkl'
@@ -146,11 +219,16 @@ if __name__ == '__main__':
     # train_data, test_data = load_pickled_data(fp)
     # dset = 2
 
-    # q3a_save_results(2, q3_a)
+    q3a_save_results(1, q3_a)
 
-    mask = torch.FloatTensor([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
-    l = MaskedConv2D(mask, 1, 1, (3,3))
-
-    inp = torch.rand((2,3,3))
-
-    out = l(inp)
+    # mask = torch.FloatTensor([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
+    # conv = MaskedConv2D(mask, 5, 10, kernel_size=(3, 3), padding=1)
+    #
+    # inp = torch.rand((2, 5, 64, 64))
+    #
+    # out = conv(inp)
+    # print(out.shape)
+    #
+    # conv1d = torch.nn.Conv2d(in_channels=10, out_channels=1, kernel_size=1)
+    # out1 = conv1d(out)
+    # print(out1.shape)
