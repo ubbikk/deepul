@@ -148,36 +148,35 @@ class PixelCNN(torch.nn.Module):
         x = F.relu(x)
 
         for block in self.blocks:
-            print(x.shape)
+            # print(x.shape)
             x = block(x)
             x = F.relu(x)
-            print(x.shape)
-            print('========================')
+            # print(x.shape)
+            # print('========================')
 
         x = self.out(x)
 
         x = x.reshape(b, H, W, self.C, self.colors)
-        probs = F.log_softmax(x, dim=1)
+        probs = F.log_softmax(x, dim=-1)
         return probs
 
     def generate_examples(self, sz=100):
         self.eval()
         with torch.no_grad():
-            inp = torch.zeros((sz, self.H, self.W), dtype=torch.float)
+            inp = torch.zeros((sz, self.C, self.H, self.W), dtype=torch.float)
             inp = to_cuda(inp)
-            self.pp = torch.zeros((sz, self.H, self.W), dtype=torch.float)
 
             for pos in range(self.H * self.W):
-                scores = self.get_log_probs([inp.reshape(sz, 1, self.H, self.W)]).reshape(sz, self.H, self.W).cpu()
+                scores = self.get_log_probs([inp]).cpu()  # .reshape(sz, self.H, self.W)
                 probs = scores.exp()
                 i = pos // self.H
                 j = pos % self.H
                 for b in range(sz):
-                    p = probs[b, i, j].numpy().item()
-                    inp[b, i, j] = sample_from_bernulli_distr(p)
-                    self.pp[b, i, j] = p
+                    for c in range(self.C):
+                        p = probs[b, i, j, c].numpy()
+                        inp[b, c, i, j] = np.random.choice(self.colors, p=p)
 
-            return inp.reshape((sz, self.H, self.W, 1)).cpu().numpy()
+            return inp.reshape((sz, self.H, self.W, self.C)).cpu().numpy()
 
 
 def to_cuda(batch):
@@ -274,7 +273,7 @@ if __name__ == '__main__':
     # dset = 2
 
     model = PixelCNN(H, W, C, 4)
-    examples = model.generate_examples(3)
+    examples = model.generate_examples(5)
 
     # q3bc_save_results(1, 'b', q3_b)
 
