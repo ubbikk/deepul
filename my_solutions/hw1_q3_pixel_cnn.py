@@ -219,7 +219,7 @@ if __name__ == '__main__':
     # train_data, test_data = load_pickled_data(fp)
     # dset = 2
 
-    q3a_save_results(1, q3_a)
+    # q3a_save_results(1, q3_a)
 
     # mask = torch.FloatTensor([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
     # conv = MaskedConv2D(mask, 5, 10, kernel_size=(3, 3), padding=1)
@@ -232,3 +232,18 @@ if __name__ == '__main__':
     # conv1d = torch.nn.Conv2d(in_channels=10, out_channels=1, kernel_size=1)
     # out1 = conv1d(out)
     # print(out1.shape)
+
+    H, W = 20, 20
+    model = PixelCNN(H, W)
+
+    i = 200
+    sz = H * W
+    x_np = (np.random.rand(H * W) > 0.5).astype(np.float)
+    x = torch.from_numpy(x_np).float()
+    x.requires_grad = True
+    y = model(x.reshape((1, 1, H, W)))
+    loss = y[i]
+    loss.backward()
+
+    max_dependent = torch.where((x.grad != 0))[0].max()
+    assert max_dependent < i
