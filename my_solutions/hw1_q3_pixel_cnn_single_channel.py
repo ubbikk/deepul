@@ -60,18 +60,21 @@ class MaskedConv2D(torch.nn.Conv2d):
                         self.padding, self.dilation, self.groups)
 
 
-cache = []
+cache = {}
 
+def get_hook(name):
+    def hook(grad):
+        cache[name] = grad
 
-def hook(grad):
-    cache.append(grad)
+    return hook
 
 
 class PixelCNN(torch.nn.Module):
-    def __init__(self, H, W):
+    def __init__(self, H, W, debug=False):
         super().__init__()
         self.H = H
         self.W = W
+        self.debug = debug
         maskA = get_conv_mask(7, 'A')
         convA = MaskedConv2D(maskA, in_channels=1, out_channels=64,
                              kernel_size=(7, 7), padding=3)
@@ -87,7 +90,8 @@ class PixelCNN(torch.nn.Module):
 
     def forward(self, *input):
         x = input[0]
-        x.register_hook(hook)
+        if self.debug:
+            x.register_hook(get_hook('inp'))
 
         b, c, H, W = x.shape
         # x = x.float()
@@ -95,30 +99,38 @@ class PixelCNN(torch.nn.Module):
         probs = self.get_probs(input)
 
         loss = self.criterion(probs, target)
-        loss.register_hook(hook)
+        if self.debug:
+            loss.register_hook(get_hook('loss'))
 
         return loss
 
     def get_probs(self, input):
         x = input[0]
         b, c, H, W = x.shape
-        x.register_hook(hook)
+        if self.debug:
+            x.register_hook(get_hook('inp_inside_get_probs'))
 
-        for conv in self.convs[:-1]:
+        for i, conv in enumerate(self.convs[:-1]):
             # print(x.shape)
             x = conv(x)
-            x.register_hook(hook)
+
+            if self.debug:
+                x.register_hook(get_hook(f'conv_{i}'))
             # print(x.shape)
             # print('========================')
             x = F.relu(x)
-            x.register_hook(hook)
+            if self.debug:
+                x.register_hook(get_hook(f'relu_{i}'))
         last_conv = self.convs[-1]
         x = last_conv(x)
-        x.register_hook(hook)
+
+        if self.debug:
+            x.register_hook(get_hook(f'last_conv'))
 
         x = x.reshape(b * c * H * W)
         probs = F.sigmoid(x)
-        probs.register_hook(hook)
+        if self.debug:
+            probs.register_hook(get_hook('probs'))
         return probs
 
     def generate_examples(self, sz=100):
@@ -248,12 +260,13 @@ if __name__ == '__main__':
     # print(out1.shape)
 
     H, W = 20, 20
-    model = PixelCNN(H, W)
+    model = PixelCNN(H, W, debug=True)
 
-    i = 0
+    i = 21
     sz = H * W
-    x_np = (np.random.rand(H * W) > 0.5).astype(np.float)
-    x = torch.from_numpy(x_np).float()
+    # x_np = (np.random.rand(H * W) > 0.5).astype(np.float)
+    # x = torch.from_numpy(x_np).float()
+    x = torch.ones((H, W)).float()
     x.requires_grad = True
     y = model(x.reshape((1, 1, H, W)))
     loss = y[i]
