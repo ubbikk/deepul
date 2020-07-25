@@ -262,7 +262,7 @@ if __name__ == '__main__':
     H, W = 20, 20
     model = PixelCNN(H, W, debug=True)
 
-    i = 21
+    i = 131
     sz = H * W
     # x_np = (np.random.rand(H * W) > 0.5).astype(np.float)
     # x = torch.from_numpy(x_np).float()
@@ -274,3 +274,7 @@ if __name__ == '__main__':
 
     max_dependent = torch.where((x.grad != 0))[0].max()
     assert max_dependent < i
+
+
+    x = cache['inp'].squeeze()
+    bl = torch.nonzero(x.reshape(20**2))
