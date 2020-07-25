@@ -215,7 +215,7 @@ if __name__ == '__main__':
 
     # q2_save_results(1, 'b', q2_b)
     model = Made(H, W)
-    q2_save_results(dset, 'b', q2_b)
+    # q2_save_results(dset, 'b', q2_b)
     # visualize_q2b_data(dset)
     # show_samples(255*examples, title=f'Generated examples')
 

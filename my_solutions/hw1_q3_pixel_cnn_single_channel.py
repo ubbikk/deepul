@@ -60,6 +60,13 @@ class MaskedConv2D(torch.nn.Conv2d):
                         self.padding, self.dilation, self.groups)
 
 
+cache = []
+
+
+def hook(grad):
+    cache.append(grad)
+
+
 class PixelCNN(torch.nn.Module):
     def __init__(self, H, W):
         super().__init__()
@@ -80,6 +87,7 @@ class PixelCNN(torch.nn.Module):
 
     def forward(self, *input):
         x = input[0]
+        x.register_hook(hook)
 
         b, c, H, W = x.shape
         # x = x.float()
@@ -87,24 +95,30 @@ class PixelCNN(torch.nn.Module):
         probs = self.get_probs(input)
 
         loss = self.criterion(probs, target)
+        loss.register_hook(hook)
 
         return loss
 
     def get_probs(self, input):
         x = input[0]
         b, c, H, W = x.shape
+        x.register_hook(hook)
 
         for conv in self.convs[:-1]:
             # print(x.shape)
             x = conv(x)
+            x.register_hook(hook)
             # print(x.shape)
             # print('========================')
             x = F.relu(x)
+            x.register_hook(hook)
         last_conv = self.convs[-1]
         x = last_conv(x)
+        x.register_hook(hook)
 
         x = x.reshape(b * c * H * W)
         probs = F.sigmoid(x)
+        probs.register_hook(hook)
         return probs
 
     def generate_examples(self, sz=100):
@@ -236,7 +250,7 @@ if __name__ == '__main__':
     H, W = 20, 20
     model = PixelCNN(H, W)
 
-    i = 200
+    i = 0
     sz = H * W
     x_np = (np.random.rand(H * W) > 0.5).astype(np.float)
     x = torch.from_numpy(x_np).float()

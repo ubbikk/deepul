@@ -83,6 +83,13 @@ class ResConvBlock(torch.nn.Module):
         return x + inp
 
 
+cache = []
+
+
+def hook(grad):
+    cache.append(grad)
+
+
 class PixelCNN(torch.nn.Module):
     def __init__(self, H, W, C, colors, num_filters=120):
         super().__init__()
@@ -119,9 +126,11 @@ class PixelCNN(torch.nn.Module):
                               h=num_filters,
                               kernel_size=kernel_size)
 
-        self.out = torch.nn.Conv2d(in_channels=num_filters,
-                                   out_channels=self.colors * self.C,
-                                   kernel_size=1)
+        self.out = MaskedConv2D(maskB,
+                                in_channels=num_filters,
+                                out_channels=self.C * self.colors,
+                                kernel_size=(kernel_size, kernel_size),
+                                padding=kernel_size // 2)
 
         blocks = [block0] + blocks1_6 + [block7]
 
@@ -137,6 +146,7 @@ class PixelCNN(torch.nn.Module):
         probs = self.get_log_probs(input).reshape(b * c * H * W, self.colors)
 
         loss = self.criterion(probs, target.long())
+        loss.register_hook(hook)
 
         return loss
 
@@ -144,20 +154,29 @@ class PixelCNN(torch.nn.Module):
         x = input[0]
         b, c, H, W = x.shape
 
+        x.register_hook(hook)
+
         x = self.convA(x)
+        x.register_hook(hook)
         x = F.relu(x)
+        x.register_hook(hook)
 
         for block in self.blocks:
             # print(x.shape)
             x = block(x)
+            x.register_hook(hook)
             x = F.relu(x)
+            x.register_hook(hook)
             # print(x.shape)
             # print('========================')
 
         x = self.out(x)
+        x.register_hook(hook)
 
         x = x.reshape(b, H, W, self.C, self.colors)
+        x.register_hook(hook)
         probs = F.log_softmax(x, dim=-1)
+        probs.register_hook(hook)
         return probs
 
     def generate_examples(self, sz=100):
@@ -272,37 +291,10 @@ if __name__ == '__main__':
     # train_data, test_data = load_pickled_data(fp)
     # dset = 2
 
-    model = PixelCNN(H, W, C, 4)
-    examples = model.generate_examples(5)
+    # model = PixelCNN(H, W, C, 4)
+    # examples = model.generate_examples(5)
 
     # q3bc_save_results(1, 'b', q3_b)
-
-    # mask = torch.FloatTensor([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
-    # conv = MaskedConv2D(mask, 5, 10, kernel_size=(3, 3), padding=1)
-    #
-    # inp = torch.rand((2, 5, 64, 64))
-    #
-    # out = conv(inp)
-    # print(out.shape)
-    #
-    # conv1d = torch.nn.Conv2d(in_channels=10, out_channels=1, kernel_size=1)
-    # out1 = conv1d(out)
-    # print(out1.shape)
-
-    # H, W = 20, 20
-    # model = PixelCNN(H, W)
-    #
-    # i = 200
-    # sz = H * W
-    # x_np = (np.random.rand(H * W) > 0.5).astype(np.float)
-    # x = torch.from_numpy(x_np).float()
-    # x.requires_grad = True
-    # y = model(x.reshape((1, 1, H, W)))
-    # loss = y[i]
-    # loss.backward()
-    #
-    # max_dependent = torch.where((x.grad != 0))[0].max()
-    # assert max_dependent < i
 
     # residual blocks
     # Unknown dim of 1D conv
@@ -318,3 +310,19 @@ if __name__ == '__main__':
 
     # Where does additional dim(for softmax) come from?
     # BxHxWxC ==> BxHxWx12 ==> Reshape ==> BxHxWx3x4
+
+    H, W, C, colors = 20, 20, 3, 4
+    model = PixelCNN(H, W, C, colors)
+
+    i = 0
+    x = torch.randint(0, colors, size=(1, C, H, W)).float()
+    x.requires_grad = True
+    y = model(x)
+    loss = y[i]
+    loss.backward(retain_graph=True)
+
+    g = x.grad.reshape(C * H * W)
+
+    max_dependent = torch.where((g != 0))[0].max()
+    print(max_dependent)
+    assert max_dependent < i
