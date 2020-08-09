@@ -1,13 +1,8 @@
-import os
-
 from torch import Tensor
-from torch.nn import BCELoss, CrossEntropyLoss, NLLLoss
+from torch.nn import NLLLoss, LayerNorm
 from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-
-from deepul.hw1_helper import q3a_save_results
-from deepul.utils import load_pickled_data
 
 from deepul.hw1_helper import *
 
@@ -147,7 +142,7 @@ class PixelCNN(torch.nn.Module):
         probs = probs.permute((0, 4, 1, 2, 3))  # b,colors,H,W,C
 
         loss = self.criterion(probs, target)  # b,H,W,C
-        loss.register_hook(hook)
+        # loss.register_hook(hook)
 
         return loss
 
@@ -155,31 +150,31 @@ class PixelCNN(torch.nn.Module):
         x = input[0]
         b, c, H, W = x.shape
 
-        x.register_hook(hook)
+        # x.register_hook(hook)
 
         x = self.convA(x)
-        x.register_hook(hook)
+        # x.register_hook(hook)
         x = F.relu(x)
-        x.register_hook(hook)
+        # x.register_hook(hook)
 
         for block in self.blocks:
             # print(x.shape)
             x = block(x)
-            x.register_hook(hook)
+            # x.register_hook(hook)
             x = F.relu(x)
-            x.register_hook(hook)
+            # x.register_hook(hook)
             # print(x.shape)
             # print('========================')
 
         x = self.out(x)
-        x.register_hook(hook)
+        # x.register_hook(hook)
 
         x = x.reshape(b, self.C, self.colors, H, W)
-        x.register_hook(hook)
-        probs = F.log_softmax(x, dim=1)
+        # x.register_hook(hook)
+        probs = F.log_softmax(x, dim=2)
         probs = probs.permute((0, 3, 4, 1, 2))  # b,H,W,C,colors
         assert tuple(probs.shape) == (b, H, W, self.C, self.colors)
-        probs.register_hook(hook)
+        # probs.register_hook(hook)
         return probs
 
     def generate_examples(self, sz=100):
@@ -189,7 +184,7 @@ class PixelCNN(torch.nn.Module):
             inp = to_cuda(inp)
 
             for pos in range(self.H * self.W):
-                scores = self.get_log_probs([inp]).cpu()  # .reshape(sz, self.H, self.W)
+                scores = self.get_log_probs([inp]).cpu()  # b,H,W,C,colors
                 probs = scores.exp()
                 i = pos // self.H
                 j = pos % self.H
@@ -198,7 +193,7 @@ class PixelCNN(torch.nn.Module):
                         p = probs[b, i, j, c].numpy()
                         inp[b, c, i, j] = np.random.choice(self.colors, p=p)
 
-            return inp.reshape((sz, self.H, self.W, self.C)).cpu().numpy()
+            return inp.permute((0, 2, 3, 1)).cpu().numpy()  # sz, self.H, self.W, self.C
 
 
 def to_cuda(batch):
@@ -295,7 +290,7 @@ if __name__ == '__main__':
     # dset = 2
 
     # model = PixelCNN(H, W, C, 4)
-    # examples = model.generate_examples(5)
+    # examples = model.generate_examples(1)
 
     # q3bc_save_results(1, 'b', q3_b)
 
@@ -317,14 +312,15 @@ if __name__ == '__main__':
     H, W, C, colors = 20, 20, 3, 4
     model = PixelCNN(H, W, C, colors)
 
-    i = 987
     x = torch.randint(0, colors, size=(1, C, H, W)).float()
     x.requires_grad = True
-    y = model(x).permute((0,3,1,2))
-    i = (0,1,5,10)
+    y = model(x).permute((0, 3, 1, 2))
+    i = (0, 2, 5, 10)
     loss = y[i]
     loss.backward(retain_graph=True)
 
     g = x.grad  # .reshape(C * H * W)
 
-    print([s.max() for s in torch.where((g != 0))])
+    bl = torch.where((g != 0))
+    print([s.max() for s in bl])
+    pass
