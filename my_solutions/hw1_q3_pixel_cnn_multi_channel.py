@@ -129,6 +129,12 @@ class PixelCNN(torch.nn.Module):
 
         blocks = [block0] + blocks1_6 + [block7]
 
+        self.convA_norm = LayerNorm([self.num_filters, self.H, self.W], elementwise_affine=False)
+        self.out_norm = LayerNorm([self.C * self.colors, self.H, self.W], elementwise_affine=False)
+        self.blocks_norm = torch.nn.ModuleList([
+            LayerNorm([self.num_filters, self.H, self.W], elementwise_affine=False) for _ in range(8)
+        ])
+
         self.blocks = torch.nn.ModuleList(blocks)
         self.criterion = NLLLoss(reduction='none')
 
@@ -153,13 +159,15 @@ class PixelCNN(torch.nn.Module):
         # x.register_hook(hook)
 
         x = self.convA(x)
+        x = self.convA_norm(x)
         # x.register_hook(hook)
         x = F.relu(x)
         # x.register_hook(hook)
 
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
             # print(x.shape)
             x = block(x)
+            x = self.blocks_norm[i](x)
             # x.register_hook(hook)
             x = F.relu(x)
             # x.register_hook(hook)
@@ -167,6 +175,7 @@ class PixelCNN(torch.nn.Module):
             # print('========================')
 
         x = self.out(x)
+        x = self.out_norm(x)
         # x.register_hook(hook)
 
         x = x.reshape(b, self.C, self.colors, H, W)
