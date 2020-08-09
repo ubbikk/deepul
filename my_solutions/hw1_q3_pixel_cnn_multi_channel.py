@@ -142,10 +142,11 @@ class PixelCNN(torch.nn.Module):
 
         b, c, H, W = x.shape
         # x = x.float()
-        target = x.reshape(b * c * H * W).detach()
-        probs = self.get_log_probs(input).reshape(b * c * H * W, self.colors)
+        target = x.long().permute((0, 2, 3, 1))  # b,C,H,W ==>b,H,W,C
+        probs = self.get_log_probs(input)  # b,H,W,C, colors
+        probs = probs.permute((0, 4, 1, 2, 3))  # b,colors,H,W,C
 
-        loss = self.criterion(probs, target.long())
+        loss = self.criterion(probs, target)  # b,H,W,C
         loss.register_hook(hook)
 
         return loss
@@ -173,9 +174,11 @@ class PixelCNN(torch.nn.Module):
         x = self.out(x)
         x.register_hook(hook)
 
-        x = x.reshape(b, H, W, self.C, self.colors)
+        x = x.reshape(b, self.C, self.colors, H, W)
         x.register_hook(hook)
-        probs = F.log_softmax(x, dim=-1)
+        probs = F.log_softmax(x, dim=1)
+        probs = probs.permute((0, 3, 4, 1, 2))  # b,H,W,C,colors
+        assert tuple(probs.shape) == (b, H, W, self.C, self.colors)
         probs.register_hook(hook)
         return probs
 
@@ -314,15 +317,14 @@ if __name__ == '__main__':
     H, W, C, colors = 20, 20, 3, 4
     model = PixelCNN(H, W, C, colors)
 
-    i = 0
+    i = 987
     x = torch.randint(0, colors, size=(1, C, H, W)).float()
     x.requires_grad = True
-    y = model(x)
+    y = model(x).permute((0,3,1,2))
+    i = (0,1,5,10)
     loss = y[i]
     loss.backward(retain_graph=True)
 
-    g = x.grad.reshape(C * H * W)
+    g = x.grad  # .reshape(C * H * W)
 
-    max_dependent = torch.where((g != 0))[0].max()
-    print(max_dependent)
-    assert max_dependent < i
+    print([s.max() for s in torch.where((g != 0))])
