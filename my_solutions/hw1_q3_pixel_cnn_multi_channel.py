@@ -19,6 +19,17 @@ class MnistDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
+class CustomLayerNorm(LayerNorm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, input: Tensor) -> Tensor:
+        x = input.permute((0, 2, 3, 1))
+        x = super(CustomLayerNorm, self).forward(x)
+        x = x.permute((0,3,1,2))
+        return x
+
+
 
 def sample_from_bernulli_distr(p):
     return np.random.binomial(1, p, 1).item()
@@ -129,10 +140,10 @@ class PixelCNN(torch.nn.Module):
 
         blocks = [block0] + blocks1_6 + [block7]
 
-        self.convA_norm = LayerNorm([self.num_filters, self.H, self.W], elementwise_affine=False)
-        self.out_norm = LayerNorm([self.C * self.colors, self.H, self.W], elementwise_affine=False)
+        self.convA_norm = CustomLayerNorm([self.num_filters], elementwise_affine=True)
+        self.out_norm = CustomLayerNorm([self.C * self.colors], elementwise_affine=True)
         self.blocks_norm = torch.nn.ModuleList([
-            LayerNorm([self.num_filters, self.H, self.W], elementwise_affine=False) for _ in range(8)
+            CustomLayerNorm([self.num_filters], elementwise_affine=True) for _ in range(8)
         ])
 
         self.blocks = torch.nn.ModuleList(blocks)
