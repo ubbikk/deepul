@@ -35,7 +35,7 @@ def sample_from_bernulli_distr(p):
     return np.random.binomial(1, p, 1).item()
 
 
-def get_conv_mask(sz, type='A'):
+def get_conv_mask_2d(sz, type='A'):
     res = np.ones(sz * sz)
     if type == 'A':
         res[sz * sz // 2:] = 0
@@ -44,10 +44,38 @@ def get_conv_mask(sz, type='A'):
     return torch.from_numpy(res.reshape(sz, sz)).float()
 
 
+def get_conv_mask_4d(in_channels, out_channels, sz, type='A'):
+    assert in_channels % 3 == 0
+    assert out_channels % 3 == 0
+    assert sz % 2 == 1
+
+    res = torch.ones((out_channels, in_channels, sz, sz))
+
+    in_ = in_channels // 3
+    out_ = out_channels // 3
+    c = (sz - 1) // 2
+
+    res_2d = torch.ones(sz ** 2)
+    res_2d[sz * sz // 2:] = 0
+    res_2d = res_2d.view((sz, sz))
+    res[:, :, ...] = res_2d
+    if type == 'A':
+        res[out_:2 * out_, :in_, c, c] = 1
+        res[2 * out_:, :2 * in_, c, c] = 1
+
+    if type == 'B':
+        res[:out_, :in_, c, c] = 1
+        res[out_:2 * out_, in_:2 * in_, c, c] = 1
+        res[2 * out_:, 2 * in_:, c, c] = 1
+
+    return res
+
+
 class MaskedConv2D(torch.nn.Conv2d):
     def __init__(self, mask, in_channels, out_channels, kernel_size, stride=1,
                  padding=0, dilation=1, groups=1,
-                 bias=True, padding_mode='zeros'):
+                 bias=True, padding_mode='zeros',
+                 independent_channels=False):
         super().__init__(in_channels, out_channels,
                          kernel_size,
                          stride=stride,
@@ -56,9 +84,12 @@ class MaskedConv2D(torch.nn.Conv2d):
                          groups=groups,
                          bias=bias,
                          padding_mode=padding_mode)
+        if independent_channels:
+            mask = mask.reshape(1, 1, *kernel_size)
+            mask = mask.repeat(1, in_channels, 1, 1)
+        else:
+            mask = get_conv_mask_4d(in_channels, out_channels, kernel_size[0])
 
-        mask = mask.reshape(1, 1, *kernel_size)
-        mask = mask.repeat(1, in_channels, 1, 1)
         self.register_buffer('mask', mask)
 
     def forward(self, input: Tensor) -> Tensor:
@@ -106,8 +137,8 @@ class PixelCNN(torch.nn.Module):
         self.num_filters = num_filters
         kernel_size = 7
 
-        maskA = get_conv_mask(kernel_size, 'A')
-        maskB = get_conv_mask(7, 'B')
+        maskA = get_conv_mask_2d(kernel_size, 'A')
+        maskB = get_conv_mask_2d(7, 'B')
 
         self.convA = MaskedConv2D(maskA,
                                   self.C,
@@ -204,15 +235,24 @@ class PixelCNN(torch.nn.Module):
             inp = torch.zeros((sz, self.C, self.H, self.W), dtype=torch.float)
             inp = to_cuda(inp)
 
-            for pos in range(self.H * self.W):
-                scores = self.get_log_probs([inp]).cpu()  # b,H,W,C,colors
-                probs = scores.exp()
-                i = pos // self.H
-                j = pos % self.H
-                for b in range(sz):
+            for i in range(self.H):
+                for j in range(self.W):
                     for c in range(self.C):
-                        p = probs[b, i, j, c].numpy()
-                        inp[b, c, i, j] = np.random.choice(self.colors, p=p)
+                        scores = self.get_log_probs([inp]).cpu()  # b,H,W,C,colors
+                        probs = scores.exp()
+                        for b in range(sz):
+                            p = probs[b, i, j, c].numpy()
+                            inp[b, c, i, j] = np.random.choice(self.colors, p=p)
+
+            # for pos in range(self.H * self.W):
+            #     scores = self.get_log_probs([inp]).cpu()  # b,H,W,C,colors
+            #     probs = scores.exp()
+            #     i = pos // self.H
+            #     j = pos % self.H
+            #     for b in range(sz):
+            #         for c in range(self.C):
+            #             p = probs[b, i, j, c].numpy()
+            #             inp[b, c, i, j] = np.random.choice(self.colors, p=p)
 
             return inp.permute((0, 2, 3, 1)).cpu().numpy()  # sz, self.H, self.W, self.C
 
@@ -272,7 +312,7 @@ model = None
 losses, test_losses, distribution = None, None, None
 
 
-def q3_b(train_data, test_data, image_shape, dset_id):
+def q3_c(train_data, test_data, image_shape, dset_id):
     global model, losses, test_losses, examples
     """
     train_data: A (n_train, H, W, C) uint8 numpy array of color images with values in {0, 1, 2, 3}
@@ -337,7 +377,9 @@ if __name__ == '__main__':
     x = torch.randint(0, colors, size=(1, C, H, W)).float()
     x.requires_grad = True
     y = model(x).permute((0, 3, 1, 2))
-    i = (0, 2, 5, 10)
+
+    c, h, w = 0, 5, 10
+    i = (0, c, h, w)
     loss = y[i]
     loss.backward(retain_graph=True)
 
@@ -346,3 +388,13 @@ if __name__ == '__main__':
     bl = torch.where((g != 0))
     print([s.max() for s in bl])
     pass
+
+    mask = bl[2] == h
+
+    for s in bl:
+        print(s[mask])
+
+    mask = (bl[2] == h) & (bl[3] == w)
+
+    for s in bl:
+        print(s[mask])
