@@ -1,3 +1,5 @@
+import random
+
 from torch import Tensor
 from torch.nn import NLLLoss, LayerNorm
 from torch.optim import Adam
@@ -26,7 +28,9 @@ class CustomLayerNorm(LayerNorm):
 
     def forward(self, input: Tensor) -> Tensor:
         x = input.permute((0, 2, 3, 1))
+        x = x.reshape(x.shape[:-1] + (3, -1))
         x = super(CustomLayerNorm, self).forward(x)
+        x = x.reshape(x.shape[:-2] + (-1,))
         x = x.permute((0, 3, 1, 2))
         return x.contiguous()
 
@@ -51,8 +55,8 @@ def get_conv_mask_4d(in_channels, out_channels, sz, type='A'):
 
     res = torch.ones((out_channels, in_channels, sz, sz))
 
-    in_ = in_channels // 3
-    out_ = out_channels // 3
+    i = in_channels // 3
+    o = out_channels // 3
     c = (sz - 1) // 2
 
     res_2d = torch.ones(sz ** 2)
@@ -60,21 +64,22 @@ def get_conv_mask_4d(in_channels, out_channels, sz, type='A'):
     res_2d = res_2d.view((sz, sz))
     res[:, :, ...] = res_2d
     if type == 'A':
-        res[out_:2 * out_, :in_, c, c] = 1
-        res[2 * out_:, :2 * in_, c, c] = 1
+        res[o:2 * o, :i, c, c] = 1
+        res[2 * o:, :2 * i, c, c] = 1
 
     if type == 'B':
-        res[:out_, :in_, c, c] = 1
-        res[out_:2 * out_, in_:2 * in_, c, c] = 1
-        res[2 * out_:, 2 * in_:, c, c] = 1
+        res[:o, :i, c, c] = 1
+        res[o:2 * o, :2 * i, c, c] = 1
+        res[2 * o:, :, c, c] = 1
 
     return res
 
 
 class MaskedConv2D(torch.nn.Conv2d):
-    def __init__(self, mask, in_channels, out_channels, kernel_size, stride=1,
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1,
                  padding=0, dilation=1, groups=1,
                  bias=True, padding_mode='zeros',
+                 conv_type='B',
                  independent_channels=False):
         super().__init__(in_channels, out_channels,
                          kernel_size,
@@ -85,10 +90,11 @@ class MaskedConv2D(torch.nn.Conv2d):
                          bias=bias,
                          padding_mode=padding_mode)
         if independent_channels:
+            mask = get_conv_mask_2d(kernel_size[0], type=conv_type)
             mask = mask.reshape(1, 1, *kernel_size)
             mask = mask.repeat(1, in_channels, 1, 1)
         else:
-            mask = get_conv_mask_4d(in_channels, out_channels, kernel_size[0])
+            mask = get_conv_mask_4d(in_channels, out_channels, kernel_size[0], type=conv_type)
 
         self.register_buffer('mask', mask)
 
@@ -98,26 +104,33 @@ class MaskedConv2D(torch.nn.Conv2d):
 
 
 class ResConvBlock(torch.nn.Module):
-    def __init__(self, mask, in_channels, out_channels, h, kernel_size):
+    def __init__(self, in_channels, out_channels, h, kernel_size):
         super().__init__()
-        self.conv = MaskedConv2D(mask,
-                                 in_channels=h,
+        self.conv = MaskedConv2D(in_channels=h,
                                  out_channels=h,
                                  kernel_size=(kernel_size, kernel_size),
                                  padding=kernel_size // 2)
 
-        self.in_conv = torch.nn.Conv2d(in_channels, h, kernel_size=1)
-        self.out_conv = torch.nn.Conv2d(h, out_channels, kernel_size=1)
+        self.in_conv = MaskedConv2D(in_channels=in_channels,
+                                    out_channels=h,
+                                    kernel_size=(1, 1))
+
+        self.out_conv = MaskedConv2D(in_channels=h,
+                                     out_channels=out_channels,
+                                     kernel_size=(1, 1))
+
+        # self.in_conv = torch.nn.Conv2d(in_channels, h, kernel_size=1)
+        # self.out_conv = torch.nn.Conv2d(h, out_channels, kernel_size=1)
 
     def forward(self, *input):
         x = input[0]
-        inp = x
+        orig = x
         x = self.in_conv(x)
         x = F.relu(x)
         x = self.conv(x)
         x = F.relu(x)
         x = self.out_conv(x)
-        return x + inp
+        return x + orig
 
 
 cache = []
@@ -137,44 +150,37 @@ class PixelCNN(torch.nn.Module):
         self.num_filters = num_filters
         kernel_size = 7
 
-        maskA = get_conv_mask_2d(kernel_size, 'A')
-        maskB = get_conv_mask_2d(7, 'B')
-
-        self.convA = MaskedConv2D(maskA,
-                                  self.C,
+        self.convA = MaskedConv2D(self.C,
                                   self.num_filters,
                                   kernel_size=(kernel_size, kernel_size),
-                                  padding=kernel_size // 2)
+                                  padding=kernel_size // 2,
+                                  conv_type='A')
 
-        block0 = ResConvBlock(maskB,
-                              in_channels=self.num_filters,
+        block0 = ResConvBlock(in_channels=self.num_filters,
                               out_channels=num_filters,
                               h=num_filters // 2,
                               kernel_size=kernel_size)
 
-        blocks1_6 = [ResConvBlock(maskB,
-                                  in_channels=num_filters,
+        blocks1_6 = [ResConvBlock(in_channels=num_filters,
                                   out_channels=num_filters,
                                   h=num_filters // 2,
                                   kernel_size=kernel_size) for _ in range(6)]
-        block7 = ResConvBlock(maskB,
-                              in_channels=num_filters,
+        block7 = ResConvBlock(in_channels=num_filters,
                               out_channels=num_filters,
                               h=num_filters // 2,
                               kernel_size=kernel_size)
 
-        self.out = MaskedConv2D(maskB,
-                                in_channels=num_filters,
+        self.out = MaskedConv2D(in_channels=num_filters,
                                 out_channels=self.C * self.colors,
                                 kernel_size=(kernel_size, kernel_size),
                                 padding=kernel_size // 2)
 
         blocks = [block0] + blocks1_6 + [block7]
 
-        self.convA_norm = CustomLayerNorm([self.num_filters], elementwise_affine=True)
-        self.out_norm = CustomLayerNorm([self.C * self.colors], elementwise_affine=True)
+        self.convA_norm = CustomLayerNorm([self.num_filters // 3], elementwise_affine=True)
+        self.out_norm = CustomLayerNorm([self.colors], elementwise_affine=True)
         self.blocks_norm = torch.nn.ModuleList([
-            CustomLayerNorm([self.num_filters], elementwise_affine=True) for _ in range(8)
+            CustomLayerNorm([self.num_filters // 3], elementwise_affine=True) for _ in range(8)
         ])
 
         self.blocks = torch.nn.ModuleList(blocks)
@@ -208,7 +214,6 @@ class PixelCNN(torch.nn.Module):
         # x.register_hook(hook)
 
         for i, block in enumerate(self.blocks):
-            # print(x.shape)
             x = block(x)
             x = self.blocks_norm[i](x)
             # x.register_hook(hook)
@@ -310,6 +315,7 @@ def train_loop(model, train_data, test_data, epochs=10, batch_size=128):
 
 model = None
 losses, test_losses, distribution = None, None, None
+var = None
 
 
 def q3_c(train_data, test_data, image_shape, dset_id):
@@ -339,6 +345,10 @@ def q3_c(train_data, test_data, image_shape, dset_id):
 
 if __name__ == '__main__':
     os.chdir('/home/ubik/projects/deepul/')
+
+    torch.manual_seed(0)
+    np.random.seed(0)
+    random.seed(0)
 
     fp = '/home/ubik/projects/deepul/homeworks/hw1/data/hw1_data/shapes_colored.pkl'
     H, W, C = 20, 20, 3
@@ -374,16 +384,17 @@ if __name__ == '__main__':
     H, W, C, colors = 20, 20, 3, 4
     model = PixelCNN(H, W, C, colors)
 
-    x = torch.randint(0, colors, size=(1, C, H, W)).float()
-    x.requires_grad = True
-    y = model(x).permute((0, 3, 1, 2))
+    inp = torch.randint(0, colors, size=(1, C, H, W)).float()
+    # print(inp.mean())
+    inp.requires_grad = True
+    y = model(inp).permute((0, 3, 1, 2))
 
-    c, h, w = 0, 5, 10
+    c, h, w = 2, 5, 10
     i = (0, c, h, w)
     loss = y[i]
     loss.backward(retain_graph=True)
 
-    g = x.grad  # .reshape(C * H * W)
+    g = inp.grad  # .reshape(C * H * W)
 
     bl = torch.where((g != 0))
     print([s.max() for s in bl])
