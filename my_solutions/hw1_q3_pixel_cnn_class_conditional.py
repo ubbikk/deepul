@@ -39,8 +39,8 @@ def get_conv_mask(sz, type='A'):
     return torch.from_numpy(res.reshape(sz, sz)).float()
 
 
-class MaskedConv2D(torch.nn.Conv2d):
-    def __init__(self, mask, in_channels, out_channels, kernel_size, stride=1,
+class ClassConditionalMaskedConv2D(torch.nn.Conv2d):
+    def __init__(self, mask, n_classes, in_channels, out_channels, kernel_size, stride=1,
                  padding=0, dilation=1, groups=1,
                  bias=True, padding_mode='zeros'):
         super().__init__(in_channels, out_channels,
@@ -51,17 +51,26 @@ class MaskedConv2D(torch.nn.Conv2d):
                          groups=groups,
                          bias=bias,
                          padding_mode=padding_mode)
-
         mask = mask.reshape(1, 1, *kernel_size)
         mask = mask.repeat(1, in_channels, 1, 1)
         self.register_buffer('mask', mask)
+        self.n_classes = n_classes
+        conditional_bias = torch.zeros((n_classes, out_channels))
+        torch.nn.init.xavier_uniform_(conditional_bias)
+        self.conditional_bias = torch.nn.Parameter(conditional_bias, requires_grad=True)
 
-    def forward(self, input: Tensor) -> Tensor:
-        return F.conv2d(input, self.weight * self.mask, self.bias, self.stride,
-                        self.padding, self.dilation, self.groups)
+    def forward(self, x, y) -> Tensor:
+        res = F.conv2d(x, self.weight * self.mask, self.bias, self.stride,
+                       self.padding, self.dilation, self.groups)
+
+        bias = self.conditional_bias[y]
+        bias = bias.reshape(*bias.shape + (1, 1))
+        res = res + bias
+        return res
 
 
 cache = {}
+
 
 def get_hook(name):
     def hook(grad):
@@ -78,10 +87,12 @@ class ClassConditionalPixelCNN(torch.nn.Module):
         self.n_classes = n_classes
         self.debug = debug
         maskA = get_conv_mask(7, 'A')
-        convA = MaskedConv2D(maskA, in_channels=1, out_channels=64,
-                             kernel_size=(7, 7), padding=3)
+        convA = ClassConditionalMaskedConv2D(maskA, self.n_classes,
+                                             in_channels=1, out_channels=64,
+                                             kernel_size=(7, 7), padding=3)
         maskB = get_conv_mask(7, 'B')
-        convsB = [MaskedConv2D(maskB, in_channels=64, out_channels=64, kernel_size=(7, 7), padding=3) for i in
+        convsB = [ClassConditionalMaskedConv2D(maskB, self.n_classes,
+                                               in_channels=64, out_channels=64, kernel_size=(7, 7), padding=3) for i in
                   range(5)]
         conv1D1 = torch.nn.Conv2d(in_channels=64, out_channels=64, kernel_size=1)
         conv1D2 = torch.nn.Conv2d(in_channels=64, out_channels=1, kernel_size=1)
@@ -91,59 +102,44 @@ class ClassConditionalPixelCNN(torch.nn.Module):
         self.criterion = BCELoss(reduction='none')
 
     def forward(self, *input):
-        x = input[0]
-        if self.debug:
-            x.register_hook(get_hook('inp'))
-
+        x = input[0].float()
+        y = input[1]
         b, c, H, W = x.shape
         # x = x.float()
         target = x.reshape(b * c * H * W).detach()
-        probs = self.get_probs(input)
+        probs = self.get_probs(x, y)
 
         loss = self.criterion(probs, target)
-        if self.debug:
-            loss.register_hook(get_hook('loss'))
 
         return loss
 
-    def get_probs(self, input):
-        x = input[0]
+    def get_probs(self, x, y):
         b, c, H, W = x.shape
-        if self.debug:
-            x.register_hook(get_hook('inp_inside_get_probs'))
 
         for i, conv in enumerate(self.convs[:-1]):
-            # print(x.shape)
-            x = conv(x)
-
-            if self.debug:
-                x.register_hook(get_hook(f'conv_{i}'))
-            # print(x.shape)
-            # print('========================')
+            if isinstance(conv, ClassConditionalMaskedConv2D):
+                x = conv(x, y)
+            else:
+                x = conv(x)
             x = F.relu(x)
-            if self.debug:
-                x.register_hook(get_hook(f'relu_{i}'))
         last_conv = self.convs[-1]
         x = last_conv(x)
 
-        if self.debug:
-            x.register_hook(get_hook(f'last_conv'))
-
         x = x.reshape(b * c * H * W)
         probs = F.sigmoid(x)
-        if self.debug:
-            probs.register_hook(get_hook('probs'))
         return probs
 
     def generate_examples(self, sz=100):
         self.eval()
+        labels = torch.arange(self.n_classes).repeat(sz // self.n_classes).sort()[0]
+        labels = to_cuda(labels)
         with torch.no_grad():
             inp = torch.zeros((sz, self.H, self.W), dtype=torch.float)
             inp = to_cuda(inp)
             self.pp = torch.zeros((sz, self.H, self.W), dtype=torch.float)
 
             for pos in range(self.H * self.W):
-                probs = self.get_probs([inp.reshape(sz, 1, self.H, self.W)]).reshape(sz, self.H, self.W).cpu()
+                probs = self.get_probs(inp.reshape(sz, 1, self.H, self.W), labels).reshape(sz, self.H, self.W).cpu()
                 i = pos // self.H
                 j = pos % self.H
                 for b in range(sz):
@@ -179,8 +175,8 @@ def train_loop(model, train_data, train_labels, test_data, test_labels, epochs=1
         # for k, v in model.named_parameters():
         #     print(k, v.abs().mean())
         for b in train_loader:
-            b = to_cuda(b).float()
-            loss = model(b).mean()
+            b = to_cuda(b)
+            loss = model(*b).mean()
 
             loss.backward()
             opt.step()
@@ -194,8 +190,8 @@ def train_loop(model, train_data, train_labels, test_data, test_labels, epochs=1
         with torch.no_grad():
             tmp = []
             for b in test_loader:
-                b = to_cuda(b).float()
-                loss = model(b).mean()
+                b = to_cuda(b)
+                loss = model(*b).mean()
                 tmp.append(loss.cpu().numpy())
 
             test_losses.append(np.mean(tmp))
@@ -234,7 +230,8 @@ def q3_d(train_data, train_labels, test_data, test_labels, image_shape, n_classe
     model = ClassConditionalPixelCNN(H, W, n_classes)
     if CUDA:
         model.cuda()
-    losses, test_losses, examples = train_loop(model, train_data, train_labels, test_data, test_labels, epochs=10, batch_size=128)
+    losses, test_losses, examples = train_loop(model, train_data, train_labels, test_data, test_labels, epochs=10,
+                                               batch_size=128)
 
     return losses, test_losses, examples
 
@@ -253,7 +250,10 @@ if __name__ == '__main__':
 
     train_loader = DataLoader(train_ds, batch_size=16, shuffle=True)
 
-    q3d_save_results(1, q3_d)
+    model = ClassConditionalPixelCNN(H, W, n_classes, debug=False)
+    samples = model.generate_examples(4)
+
+    # q3d_save_results(1, q3_d)
 
     # fp = '/home/ubik/projects/deepul/homeworks/hw1/data/hw1_data/mnist.pkl'
     # H, W = 28, 28
