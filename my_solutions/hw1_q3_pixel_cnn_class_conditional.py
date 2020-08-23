@@ -240,9 +240,9 @@ def q3_d(train_data, train_labels, test_data, test_labels, image_shape, n_classe
 
 
 if __name__ == '__main__':
-    os.chdir('/home/ubik/projects/deepul/')
+    os.chdir('/home/ubik/projects/')
 
-    fp = '/home/ubik/projects/deepul/homeworks/hw1/data/hw1_data/shapes.pkl'
+    fp = '/home/ubik/projects/deepul/homeworks/hw1/data/shapes.pkl'
     H, W, n_classes = 20, 20, 4
     train_data, test_data, train_labels, test_labels = load_pickled_data(fp, include_labels=True)
 
@@ -252,6 +252,8 @@ if __name__ == '__main__':
     test_ds = MnistDataset(test_data, test_labels)
 
     train_loader = DataLoader(train_ds, batch_size=16, shuffle=True)
+
+    q3d_save_results(1, q3_d)
 
     # fp = '/home/ubik/projects/deepul/homeworks/hw1/data/hw1_data/mnist.pkl'
     # H, W = 28, 28
