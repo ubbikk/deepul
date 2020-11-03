@@ -1,7 +1,7 @@
 from typing import Any, Union
 
 import pytorch_lightning as pl
-from pytorch_lightning import Trainer, LightningModule, TrainResult, EvalResult
+from pytorch_lightning import Trainer, LightningModule
 from pytorch_lightning.loggers import LightningLoggerBase
 from pytorch_lightning.loggers.base import DummyExperiment
 from pytorch_lightning.utilities import rank_zero_only
@@ -103,21 +103,18 @@ class PixelCnnEstimator(LightningModule):
         preds = self.model(batch.float())
         loss = preds.mean()
         self.losses.append(loss.detach().cpu().numpy().item())
-        res = TrainResult(loss)
-        res.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        res.log('blja', torch.Tensor([2]), on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('blja', torch.Tensor([2]), on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
-        return res
+        return loss
 
-    def validation_step(self, batch, batch_idx) -> EvalResult:
+    def validation_step(self, batch, batch_idx):
         preds = self.model(batch.float())
         loss = preds.mean()
-        res = EvalResult()
-        res.log('val/loss', loss, on_epoch=True, on_step=False)
-        res.log('ff', torch.Tensor([2]))
-        # res.log('preds', preds, logger=False)
+        self.log('val/loss', loss, on_epoch=True, on_step=False)
+        self.log('ff', torch.Tensor([2]))
 
-        return res
+        return loss
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
@@ -126,10 +123,9 @@ class PixelCnnEstimator(LightningModule):
     def validation_epoch_end(self, outputs):
         ll = outputs['val/loss']
         loss = torch.mean(ll)
-        result = pl.EvalResult()
-        result.log('val/loss', loss, on_step=False, on_epoch=True)
+        self.log('val/loss', loss, on_step=False, on_epoch=True)
         self.test_losses.append(loss.detach().cpu().numpy().item())
-        return result
+        return loss
 
 
 class PixelCNN(torch.nn.Module):
@@ -223,7 +219,7 @@ def pl_training_loop(train_data, test_data, image_shape, dset_id):
     estimator = PixelCnnEstimator(H, W)
     trainer = Trainer(max_epochs=epochs,
                       gradient_clip_val=1,
-                      gpus=1,
+                      # gpus=1,
                       # limit_train_batches=3,
                       # limit_val_batches=3,
                       check_val_every_n_epoch=1,
