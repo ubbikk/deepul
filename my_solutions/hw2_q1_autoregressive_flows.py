@@ -4,6 +4,7 @@ from deepul.hw2_helper import *
 from torch.utils.data import Dataset, DataLoader
 import torch
 from torch.distributions import normal
+
 # import deepul.pytorch_util as ptu
 
 CUDA = torch.cuda.is_available()
@@ -39,10 +40,10 @@ class AutoregressiveFlow2D(torch.nn.Module):
     def get_probs(self, inp):
         z1, z2, m1, m2 = self.get_outputs(inp)
 
-        mask = (z1>=0)&(z1<=1)
+        mask = (z1 >= 0) & (z1 <= 1)
         m1 = torch.where(mask, m1, torch.tensor(1e-8))
 
-        mask = (z2>=0)&(z2<=1)
+        mask = (z2 >= 0) & (z2 <= 1)
         m2 = torch.where(mask, m2, torch.tensor(1e-8))
 
         return torch.stack([m1, m2], dim=1)
@@ -125,8 +126,8 @@ class AutFlow2DEstimator(LightningModule):
 def pl_training_loop(train_data, test_data, dset_id):
     global train_losses, test_losses, densities, latents, model
 
-    batch_size = 32
-    epochs = 100
+    batch_size = 64
+    epochs = 1000
 
     train_ds = Pairs(train_data)
     test_ds = Pairs(test_data)
@@ -161,6 +162,7 @@ trainer = None
 estimator = None
 train_losses, test_losses, densities, latents = None, None, None, None
 
+
 def to_cuda(batch):
     if not CUDA:
         return batch
@@ -193,7 +195,7 @@ def q1_a(train_data, test_data, dset_id):
 
     train_losses, test_losses, latents, model = pl_training_loop(train_data, test_data, dset_id)
 
-    #heatmap
+    # heatmap
     dx, dy = 0.025, 0.025
     if dset_id == 1:  # face
         x_lim = (-4, 4)
@@ -208,7 +210,7 @@ def q1_a(train_data, test_data, dset_id):
 
     with torch.no_grad():
         probs = model.get_probs(mesh_xs)
-        densities = probs[:, 0]*probs[:, 1]
+        densities = probs[:, 0] * probs[:, 1]
     # densities = np.exp(ptu.get_numpy(ar_flow.log_prob(mesh_xs)))
 
     # latents
