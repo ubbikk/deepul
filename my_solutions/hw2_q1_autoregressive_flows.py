@@ -85,7 +85,7 @@ class AutoregressiveFlow2D(torch.nn.Module):
             z1, z2, m1, m2 = self.get_outputs(inp)
             z1 = z1.cpu().numpy()
             z2 = z2.cpu().numpy()
-            return np.stack([z1, z2])
+            return np.stack([z1, z2], axis=1)
 
 
 class AutFlow2DEstimator(LightningModule):
@@ -125,8 +125,8 @@ class AutFlow2DEstimator(LightningModule):
 def pl_training_loop(train_data, test_data, dset_id):
     global train_losses, test_losses, densities, latents, model
 
-    batch_size = 128
-    epochs = 3
+    batch_size = 32
+    epochs = 100
 
     train_ds = Pairs(train_data)
     test_ds = Pairs(test_data)
@@ -191,7 +191,7 @@ def q1_a(train_data, test_data, dset_id):
     """ YOUR CODE HERE """
     global train_losses, test_losses, densities, latents, model
 
-    train_losses, test_losses, densities, model = pl_training_loop(train_data, test_data, dset_id)
+    train_losses, test_losses, latents, model = pl_training_loop(train_data, test_data, dset_id)
 
     #heatmap
     dx, dy = 0.025, 0.025
@@ -207,7 +207,8 @@ def q1_a(train_data, test_data, dset_id):
     mesh_xs = to_cuda(mesh_xs)
 
     with torch.no_grad():
-        densities = model.get_probs(mesh_xs)
+        probs = model.get_probs(mesh_xs)
+        densities = probs[:, 0]*probs[:, 1]
     # densities = np.exp(ptu.get_numpy(ar_flow.log_prob(mesh_xs)))
 
     # latents
