@@ -219,10 +219,10 @@ class AutFlow2DEstimator(LightningModule):
 
 
 def pl_training_loop(train_data, test_data, dset_id):
-    global train_losses, test_losses, densities, latents, model
+    global train_losses, test_losses, densities, latents, model, estimator
 
     batch_size = 128
-    epochs = 5000
+    epochs = 100
 
     train_ds = Pairs(train_data)
     test_ds = Pairs(test_data)
