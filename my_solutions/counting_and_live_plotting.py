@@ -2,8 +2,9 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from torch.nn.utils.rnn import pad_sequence
-from pytorch_lightning import Trainer, LightningModule
+from pytorch_lightning import Trainer, LightningModule, Callback
 from torch.optim import Adam
+import streamlit as st
 
 
 class CountDataset(Dataset):
@@ -58,6 +59,7 @@ class CountEstimator(LightningModule):
     def __init__(self, model, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.model = model
+        self.losses = []
 
     def training_step(self, batch, batch_idx):
         return self.model(*batch)
@@ -66,27 +68,45 @@ class CountEstimator(LightningModule):
         with torch.no_grad():
             loss = self.model(*batch)
             self.log('val/loss', loss)
+            return loss
+
+    def validation_epoch_end(self, outputs):
+        loss = torch.stack(outputs).mean().numpy()
+        self.losses.append(loss)
 
     def configure_optimizers(self):
         return Adam(self.model.parameters(), lr=3e-4)
 
 
+class UpdatePlotCallback(Callback):
+    def __init__(self, chart=None):
+        self.chart = chart
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        losses = pl_module.losses
+        rows = np.array(losses[-1]).reshape(1,1)
+        print(f'Adding rows {rows}')
+        self.chart.add_rows(rows)
+
 MAX_VAL = 100
 
-if __name__ == '__main__':
-    dataset = CountDataset(max_val=MAX_VAL)
-    loader = DataLoader(dataset, batch_size=64, collate_fn=collate)
+progress_bar = st.sidebar.progress(0)
+status_text = st.sidebar.empty()
+# last_rows = np.random.randn(1, 1)
+chart = st.line_chart()
 
-    model = CountModel(max_val=MAX_VAL)
-    estimator = CountEstimator(model)
+dataset = CountDataset(max_val=MAX_VAL)
+loader = DataLoader(dataset, batch_size=64, collate_fn=collate)
 
-    # ll = list(loader)
-    # batch = ll[0]
-    #
-    # out = model(*batch)
+model = CountModel(max_val=MAX_VAL)
+estimator = CountEstimator(model)
 
-    trainer = Trainer(max_epochs=10,
-                      check_val_every_n_epoch=1,
-                      # num_sanity_val_steps=0
-                      )
-    trainer.fit(estimator, train_dataloader=loader, val_dataloaders=loader)
+trainer = Trainer(max_epochs=1000,
+                  callbacks=[UpdatePlotCallback(chart)],
+                  check_val_every_n_epoch=1,
+                  num_sanity_val_steps=0
+                  )
+trainer.fit(estimator, train_dataloader=loader, val_dataloaders=loader)
+
+progress_bar.empty()
+st.button("Re-run")
