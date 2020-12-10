@@ -1,4 +1,5 @@
 from pytorch_lightning import LightningModule, Trainer
+from torch.utils.tensorboard import SummaryWriter
 
 from deepul.hw2_helper import *
 from torch.utils.data import Dataset, DataLoader
@@ -8,6 +9,7 @@ from torch.distributions import normal
 # import deepul.pytorch_util as ptu
 
 CUDA = torch.cuda.is_available()
+
 
 def seed_everything(seed=0):
     import random
@@ -34,9 +36,10 @@ class Pairs(Dataset):
     def __getitem__(self, item):
         return self.data[item]
 
+
 class NonNegativeLinear(torch.nn.Linear):
     def forward(self, input):
-        return F.linear(input, self.weight**2, self.bias)
+        return F.linear(input, self.weight ** 2, self.bias)
 
 
 class AutoregressiveFlow2D(torch.nn.Module):
@@ -80,7 +83,7 @@ class AutoregressiveFlow2D(torch.nn.Module):
         z1 = (sig @ w).detach()
 
         sig = sig - sig ** 2
-        sig = sig * self.mixture1.weight.T.abs()**2
+        sig = sig * self.mixture1.weight.T.abs() ** 2
 
         m1 = sig @ w
 
@@ -92,7 +95,7 @@ class AutoregressiveFlow2D(torch.nn.Module):
         z2 = (sig @ w).detach()
 
         sig = sig - sig ** 2
-        sig = sig * self.mixture2.weight.T.abs()**2
+        sig = sig * self.mixture2.weight.T.abs() ** 2
         sig = sig * self.inner_net.weight[0][1].abs()
 
         m2 = sig @ w
@@ -148,14 +151,15 @@ class AutoregressiveFlow2DQuadraticInnerNet(torch.nn.Module):
         z1 = (sig @ w).detach()
 
         sig = sig - sig ** 2
-        sig = sig * self.mixture1.weight.T.abs()**2
+        sig = sig * self.mixture1.weight.T.abs() ** 2
 
         m1 = sig @ w
 
-        data = [x1, x1 ** 2, x1**3,
-                x2, x2*x1, x2*x1**2, x2*x1**3,
-                torch.sin(x1),
-                x2*torch.sin(x1)]
+        data = [x1, x1 ** 2, x1 ** 3,
+                x2, x2 * x1, x2 * x1 ** 2, x2 * x1 ** 3,
+                x2 * torch.sin(x1),
+                x2*torch.exp(x1)
+                ]
         X = torch.stack(data, dim=2).squeeze()
         X = self.inner_net(X)
         w = torch.softmax(self.mixture2_weights, dim=0)
@@ -165,11 +169,12 @@ class AutoregressiveFlow2DQuadraticInnerNet(torch.nn.Module):
         z2 = (sig @ w).detach()
 
         sig = sig - sig ** 2
-        sig = sig * self.mixture2.weight.T.abs()**2
+        sig = sig * self.mixture2.weight.T.abs() ** 2
 
         inner_weight = self.inner_net.weight
         d_inner = inner_weight[0, 3] + inner_weight[0, 4] * x1 + \
-                  inner_weight[0, 5] * x1**2 + inner_weight[0, 6] * x1**3 +inner_weight[0, 8]*torch.sin(x1)
+                  inner_weight[0, 5] * x1 ** 2 + inner_weight[0, 6] * x1 ** 3 \
+                  + inner_weight[0, 7] * torch.sin(x1)+ inner_weight[0, 8] * torch.exp(x1)
         sig = sig * d_inner.abs()
 
         m2 = sig @ w
@@ -185,7 +190,7 @@ class AutoregressiveFlow2DQuadraticInnerNet(torch.nn.Module):
 
 
 class AutFlow2DEstimator(LightningModule):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, model, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.model = AutoregressiveFlow2D()
         self.losses = []
@@ -195,14 +200,14 @@ class AutFlow2DEstimator(LightningModule):
         preds = self.model(batch)
         loss = preds.mean()
         self.losses.append(loss.detach().cpu().numpy().item())
-        self.log('train/loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log('train/loss', loss, prog_bar=True, logger=True)
 
         return loss
 
     def validation_step(self, batch, batch_idx):
         preds = self.model(batch)
         loss = preds.mean()
-        self.log('val/loss', loss, on_epoch=True, on_step=False)
+        self.log('val/loss', loss)
 
         return loss
 
@@ -213,16 +218,18 @@ class AutFlow2DEstimator(LightningModule):
     def validation_epoch_end(self, outputs):
         ll = outputs
         loss = torch.stack(ll).mean()
-        self.log('val/loss', loss, on_step=False, on_epoch=True)
         self.test_losses.append(loss.detach().cpu().numpy().item())
+        # self.log('val/loss_after_epoch', loss, on_epoch=True, on_step=False)
+        self.logger.log_metrics({'val/loss_after_epoch': loss},
+                                step=self.trainer.current_epoch)
         return loss
 
 
 def pl_training_loop(train_data, test_data, dset_id):
-    global train_losses, test_losses, densities, latents, model, estimator
+    global train_losses, test_losses, densities, latents, model, estimator, trainer
 
     batch_size = 128
-    epochs = 100
+    epochs = 500
 
     train_ds = Pairs(train_data)
     test_ds = Pairs(test_data)
@@ -230,7 +237,8 @@ def pl_training_loop(train_data, test_data, dset_id):
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
-    estimator = AutFlow2DEstimator()
+    model = AutoregressiveFlow2DQuadraticInnerNet()
+    estimator = AutFlow2DEstimator(model)
     trainer = Trainer(max_epochs=epochs,
                       gradient_clip_val=1,
                       # gpus=1,
@@ -267,10 +275,11 @@ def to_cuda(batch):
 
     return [b.cuda() for b in batch]
 
-def plot_range(model, color, xs=(-2, -1), ys=(2,3),sz=1000):
+
+def plot_range(model, color, xs=(-2, -1), ys=(2, 3), sz=1000):
     points = torch.rand((sz, 2))
-    points[:, 0]= (xs[1]-xs[0])*points[:, 0]+xs[0]
-    points[:, 1] = (ys[1]-ys[0])*points[:, 1]+ys[0]
+    points[:, 0] = (xs[1] - xs[0]) * points[:, 0] + xs[0]
+    points[:, 1] = (ys[1] - ys[0]) * points[:, 1] + ys[0]
 
     # inp = torch.cartesian_prod(x,y)
 
@@ -279,30 +288,30 @@ def plot_range(model, color, xs=(-2, -1), ys=(2,3),sz=1000):
 
     plt.scatter(z1, z2, color=color, s=1)
 
+
 def plot_transformation(model, cmap='hsv'):
     x_lim = (-4, 4)
     y_lim = (-4, 4)
 
-    sz=200
-    d=np.array([[x,y] for x in range(sz) for y in range(sz)])/sz
-    d[:, 0] = (x_lim[1]-x_lim[0])*d[:, 0] + x_lim[0]
-    d[:, 1] = (y_lim[1]-y_lim[0])*d[:, 1] + y_lim[0]
+    sz = 200
+    d = np.array([[x, y] for x in range(sz) for y in range(sz)]) / sz
+    d[:, 0] = (x_lim[1] - x_lim[0]) * d[:, 0] + x_lim[0]
+    d[:, 1] = (y_lim[1] - y_lim[0]) * d[:, 1] + y_lim[0]
 
     x, y = d[:, 0], d[:, 1]
 
     # colors = np.arange(sz**2)/sz**2
 
     g = 8
-    div = sz//g
+    div = sz // g
     # colors = np.array([[x,y] for x in range(sz) for y in range(sz)])
-    colors = np.array([g*(x//div)+y//div for x in range(sz) for y in range(sz)])
-    colors=colors/float(g**2)
-    colors = colors.reshape(sz**2)
-
+    colors = np.array([g * (x // div) + y // div for x in range(sz) for y in range(sz)])
+    colors = colors / float(g ** 2)
+    colors = colors.reshape(sz ** 2)
 
     plt.figure()
     plt.title('Original Space')
-    plt.scatter(x,y, c=colors, cmap=cmap, s=1)
+    plt.scatter(x, y, c=colors, cmap=cmap, s=1)
 
     with torch.no_grad():
         z1, z2, _, _ = model.get_outputs(torch.from_numpy(d))
@@ -310,6 +319,7 @@ def plot_transformation(model, cmap='hsv'):
     plt.figure()
     plt.title('Latent Space')
     plt.scatter(z1, z2, c=colors, cmap=cmap, s=1)
+
 
 def q1_a(train_data, test_data, dset_id):
     """
@@ -361,25 +371,25 @@ if __name__ == '__main__':
     q1_save_results(1, 'a', q1_a)
 
     plt.figure()
-    plot_range(model,'black', (-2, -1), (2,3))
-    plot_range(model,'green', (1,2), (2,3))
-    plot_range(model,'yellow', (-1,1), (-1,0))
+    plot_range(model, 'black', (-2, -1), (2, 3))
+    plot_range(model, 'green', (1, 2), (2, 3))
+    plot_range(model, 'yellow', (-1, 1), (-1, 0))
     # plot_range(model,'red', (-1,1), (0,2))
-    plot_range(model,'red', (-1,1), (1,2))
+    plot_range(model, 'red', (-1, 1), (1, 2))
     plot_range(model, 'orange', (-3, -1), (0, 1))
     plot_range(model, 'grey', (-1, 1), (2, 3))
 
     plt.figure()
-    plot_range(model,'black', (-2, -1), (2,3), 1000)
-    plot_range(model,'green', (1,2), (2,3), 1000)
+    plot_range(model, 'black', (-2, -1), (2, 3), 1000)
+    plot_range(model, 'green', (1, 2), (2, 3), 1000)
 
     plt.figure()
-    plot_range(model,'green', (-3, 3), (0,1))
-    plot_range(model,'blue', (-3, 3), (1,2))
-    plot_range(model,'red', (-1,1), (2,3))
+    plot_range(model, 'green', (-3, 3), (0, 1))
+    plot_range(model, 'blue', (-3, 3), (1, 2))
+    plot_range(model, 'red', (-1, 1), (2, 3))
 
-    plot_range(model,'yellow', (-3,-2), (2,3))
-    plot_range(model,'orange', (2,3), (1,2))
+    plot_range(model, 'yellow', (-3, -2), (2, 3))
+    plot_range(model, 'orange', (2, 3), (1, 2))
     # plot_range(model, 'orange', (-3, -1), (0, 1))
     # plot_range(model, 'grey', (-1, 1), (2, 3))
 
@@ -398,3 +408,5 @@ if __name__ == '__main__':
     # net = AutoregressiveFlow2D()
     #
     # net(inp)
+
+    print(trainer.logger.log_dir)
