@@ -79,21 +79,31 @@ class CountEstimator(LightningModule):
 
 
 class UpdatePlotCallback(Callback):
-    def __init__(self, chart=None):
+    def __init__(self, epochs, chart, progress_bar, status_text):
+        self.epochs = epochs
         self.chart = chart
+        self.progress_bar = progress_bar
+        self.status_text = status_text
 
     def on_validation_epoch_end(self, trainer, pl_module):
         losses = pl_module.losses
         rows = np.array(losses[-1]).reshape(1,1)
-        print(f'Adding rows {rows}')
         self.chart.add_rows(rows)
+
+        epoch = trainer.current_epoch
+        progress = int(((epoch+1)/self.epochs)*100)
+        self.progress_bar.progress(progress)
+
+        self.status_text.text(f'{progress}% Complete')
 
 MAX_VAL = 100
 
 progress_bar = st.sidebar.progress(0)
 status_text = st.sidebar.empty()
+status_text.text('0% Complete')
 # last_rows = np.random.randn(1, 1)
 chart = st.line_chart()
+epochs = st.number_input("Enter a number", 1, 1000, 10)
 
 dataset = CountDataset(max_val=MAX_VAL)
 loader = DataLoader(dataset, batch_size=64, collate_fn=collate)
@@ -101,8 +111,10 @@ loader = DataLoader(dataset, batch_size=64, collate_fn=collate)
 model = CountModel(max_val=MAX_VAL)
 estimator = CountEstimator(model)
 
-trainer = Trainer(max_epochs=1000,
-                  callbacks=[UpdatePlotCallback(chart)],
+plotting_callback = UpdatePlotCallback(epochs, chart, progress_bar, status_text)
+
+trainer = Trainer(max_epochs=epochs,
+                  callbacks=[plotting_callback],
                   check_val_every_n_epoch=1,
                   num_sanity_val_steps=0
                   )
