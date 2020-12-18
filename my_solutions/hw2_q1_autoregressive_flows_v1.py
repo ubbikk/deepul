@@ -39,11 +39,6 @@ class Pairs(Dataset):
         return self.data[item]
 
 
-class NonNegativeLinear(torch.nn.Linear):
-    def forward(self, input):
-        return F.linear(input, self.weight ** 2, self.bias)
-
-
 class NormalizingFlowOfCdfs(torch.nn.Module):
     def __init__(self, mixture_dim=5):
         super().__init__()
@@ -57,10 +52,11 @@ class NormalizingFlowOfCdfs(torch.nn.Module):
     def forward(self, x):
         weights = torch.softmax(self.mixture_weights, dim=0)
         dist = Normal(self.loc, self.log_scale.exp())
-        z = dist.cdf(x)@weights
+        z = dist.cdf(x) @ weights
         # z = z.detach()
-        dz = dist.log_prob(x).exp()@weights
+        dz = dist.log_prob(x).exp() @ weights
         return z, dz
+
 
 class AutoregressiveNormalizingFlow2D(torch.nn.Module):
     def __init__(self, mixture_dim=5):
@@ -73,7 +69,7 @@ class AutoregressiveNormalizingFlow2D(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Linear(64, 32),
             torch.nn.ReLU(),
-            torch.nn.Linear(32, 3*mixture_dim)
+            torch.nn.Linear(32, 3 * mixture_dim)
         )
 
     def get_outputs(self, inp):
@@ -87,7 +83,7 @@ class AutoregressiveNormalizingFlow2D(torch.nn.Module):
         weights, loc, log_scale = torch.chunk(y, 3, dim=1)
         scale = log_scale.exp()
 
-        weights = torch.softmax(weights, dim=0)
+        weights = torch.softmax(weights, dim=1)
         dist = Normal(loc, scale)
         z2 = (dist.cdf(x2) * weights).sum(dim=1)
         m2 = (dist.log_prob(x2).exp() * weights).sum(dim=1)
@@ -115,153 +111,6 @@ class AutoregressiveNormalizingFlow2D(torch.nn.Module):
     def forward(self, inp):
         probs = self.get_probs(inp)
         return - probs.log().mean()
-
-
-class AutoregressiveFlow2D(torch.nn.Module):
-    def __init__(self, mixture_dim=50):
-        super().__init__()
-        self.mixture_dim = mixture_dim
-        self.mixture1 = NonNegativeLinear(1, mixture_dim)
-        self.mixture1_weights = torch.nn.Parameter(torch.ones(mixture_dim, dtype=torch.float))
-
-        self.mixture2 = NonNegativeLinear(1, mixture_dim)
-        self.mixture2_weights = torch.nn.Parameter(torch.ones(mixture_dim, dtype=torch.float))
-
-        self.inner_net = torch.nn.Linear(2, 1)
-
-    def forward(self, inp):
-        probs = self.get_probs(inp)
-        return - probs.log().mean()
-
-    def get_probs(self, inp):
-        z1, z2, m1, m2 = self.get_outputs(inp)
-
-        mask = (z1 >= 0) & (z1 <= 1)
-        m1 = torch.where(mask, m1, torch.tensor(1e-8))
-
-        mask = (z2 >= 0) & (z2 <= 1)
-        m2 = torch.where(mask, m2, torch.tensor(1e-8))
-
-        return torch.stack([m1, m2], dim=1)
-
-    def get_outputs(self, inp):
-        inp = inp.float()
-
-        x1 = inp[:, 0].unsqueeze(-1)
-        x2 = inp[:, 1].unsqueeze(-1)
-
-        X = x1
-        w = torch.softmax(self.mixture1_weights, dim=0)
-
-        sig = self.mixture1(X)
-        sig = torch.sigmoid(sig)
-        z1 = (sig @ w).detach()
-
-        sig = sig - sig ** 2
-        sig = sig * self.mixture1.weight.T.abs() ** 2
-
-        m1 = sig @ w
-
-        X = self.inner_net(inp)
-        w = torch.softmax(self.mixture2_weights, dim=0)
-
-        sig = self.mixture2(X)
-        sig = torch.sigmoid(sig)
-        z2 = (sig @ w).detach()
-
-        sig = sig - sig ** 2
-        sig = sig * self.mixture2.weight.T.abs() ** 2
-        sig = sig * self.inner_net.weight[0][1].abs()
-
-        m2 = sig @ w
-
-        return z1, z2, m1, m2
-
-    def get_latent_variables(self, inp):
-        with torch.no_grad():
-            z1, z2, m1, m2 = self.get_outputs(inp)
-            z1 = z1.cpu().numpy()
-            z2 = z2.cpu().numpy()
-            return np.stack([z1, z2], axis=1)
-
-
-class AutoregressiveFlow2DQuadraticInnerNet(torch.nn.Module):
-    def __init__(self, mixture_dim=50):
-        super().__init__()
-        self.mixture_dim = mixture_dim
-        self.mixture1 = NonNegativeLinear(1, mixture_dim)
-        self.mixture1_weights = torch.nn.Parameter(torch.ones(mixture_dim, dtype=torch.float))
-
-        self.mixture2 = NonNegativeLinear(1, mixture_dim)
-        self.mixture2_weights = torch.nn.Parameter(torch.ones(mixture_dim, dtype=torch.float))
-
-        self.inner_net = torch.nn.Linear(9, 1)
-
-    def forward(self, inp):
-        probs = self.get_probs(inp)
-        return - probs.log().mean()
-
-    def get_probs(self, inp):
-        z1, z2, m1, m2 = self.get_outputs(inp)
-
-        mask = (z1 >= 0) & (z1 <= 1)
-        m1 = torch.where(mask, m1, torch.tensor(1e-8))
-
-        mask = (z2 >= 0) & (z2 <= 1)
-        m2 = torch.where(mask, m2, torch.tensor(1e-8))
-
-        return torch.stack([m1, m2], dim=1)
-
-    def get_outputs(self, inp):
-        inp = inp.float()
-
-        x1 = inp[:, 0].unsqueeze(-1)
-        x2 = inp[:, 1].unsqueeze(-1)
-
-        X = x1
-        w = torch.softmax(self.mixture1_weights, dim=0)
-
-        sig = self.mixture1(X)
-        sig = torch.sigmoid(sig)
-        z1 = (sig @ w).detach()
-
-        sig = sig - sig ** 2
-        sig = sig * self.mixture1.weight.T.abs() ** 2
-
-        m1 = sig @ w
-
-        data = [x1, x1 ** 2, x1 ** 3,
-                x2, x2 * x1, x2 * x1 ** 2, x2 * x1 ** 3,
-                x2 * torch.sin(x1),
-                x2*torch.exp(x1)
-                ]
-        X = torch.stack(data, dim=2).squeeze()
-        X = self.inner_net(X)
-        w = torch.softmax(self.mixture2_weights, dim=0)
-
-        sig = self.mixture2(X)
-        sig = torch.sigmoid(sig)
-        z2 = (sig @ w).detach()
-
-        sig = sig - sig ** 2
-        sig = sig * self.mixture2.weight.T.abs() ** 2
-
-        inner_weight = self.inner_net.weight
-        d_inner = inner_weight[0, 3] + inner_weight[0, 4] * x1 + \
-                  inner_weight[0, 5] * x1 ** 2 + inner_weight[0, 6] * x1 ** 3 \
-                  + inner_weight[0, 7] * torch.sin(x1)+ inner_weight[0, 8] * torch.exp(x1)
-        sig = sig * d_inner.abs()
-
-        m2 = sig @ w
-
-        return z1, z2, m1, m2
-
-    def get_latent_variables(self, inp):
-        with torch.no_grad():
-            z1, z2, m1, m2 = self.get_outputs(inp)
-            z1 = z1.cpu().numpy()
-            z2 = z2.cpu().numpy()
-            return np.stack([z1, z2], axis=1)
 
 
 class AutFlow2DEstimator(LightningModule):
@@ -304,7 +153,7 @@ def pl_training_loop(train_data, test_data, dset_id):
     global train_losses, test_losses, densities, latents, model, estimator, trainer
 
     batch_size = 64
-    epochs = 500
+    epochs = 250
 
     train_ds = Pairs(train_data)
     test_ds = Pairs(test_data)
