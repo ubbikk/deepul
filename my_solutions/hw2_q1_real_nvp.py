@@ -36,7 +36,7 @@ class Pairs(Dataset):
         return self.data[item]
 
 
-class CouplingLayer2D(torch.nn.Module):
+class SimpleCouplingLayer2D(torch.nn.Module):
     def __init__(self, inplace=0):
         super().__init__()
         self.inplace = inplace
@@ -80,12 +80,54 @@ class CouplingLayer2D(torch.nn.Module):
 
             return torch.cat([x1, x2], dim=1)
 
+class MlpCouplingLayer2D(torch.nn.Module):
+    def __init__(self, inplace=0):
+        super().__init__()
+        self.inplace = inplace
+        self.scale = torch.nn.Parameter(torch.zeros(1))
+        self.scale_shift = torch.nn.Parameter(torch.zeros(1))
+        self.g_scale = torch.nn.Sequential(
+            torch.nn.Linear(1, 64),
+            torch.nn.ReLU(),
+            torch.nn.Linear(64, 32),
+            torch.nn.ReLU(),
+            torch.nn.Linear(32, 1)
+        )
+        self.g_shift = torch.nn.Sequential(
+            torch.nn.Linear(1, 64),
+            torch.nn.ReLU(),
+            torch.nn.Linear(64, 32),
+            torch.nn.ReLU(),
+            torch.nn.Linear(32, 1)
+        )
+
+        self.scale.data.normal_(mean=0.0, std=0.02)
+        self.scale_shift.data.normal_(mean=0.0, std=0.02)
+        # self.g_scale.data.normal_(mean=0.0, std=0.02)
+        # self.g_shift.data.normal_(mean=0.0, std=0.02)
+
+    def forward(self, inp):
+        x1, x2 = torch.chunk(inp.float(), chunks=2, dim=1)
+
+        if self.inplace == 0:
+            z1 = x1
+            log_scale = self.scale * torch.tanh(self.g_scale(x1)) + self.scale_shift
+            z2 = torch.exp(log_scale) * x2 + self.g_shift(x1)
+
+            return torch.cat([z1, z2], dim=1), log_scale
+        else:
+            z2 = x2
+            log_scale = self.scale * torch.tanh(self.g_scale(x2)) + self.scale_shift
+            z1 = torch.exp(log_scale) * x1 + self.g_shift(x2)
+
+            return torch.cat([z1, z2], dim=1), log_scale
+
 
 class RealNVP2D(torch.nn.Module):
     def __init__(self, layers=2):
         super().__init__()
         inversions = [0, 1] * (layers // 2)
-        self.layers = torch.nn.ModuleList([CouplingLayer2D(i) for i in inversions])
+        self.layers = torch.nn.ModuleList([MlpCouplingLayer2D(i) for i in inversions])
         self.d = Normal(0, 1)
 
     def forward(self, inp):
@@ -99,6 +141,7 @@ class RealNVP2D(torch.nn.Module):
         loss = det.squeeze()
         loss += self.d.log_prob(x).sum(dim=1)
         loss = loss.mean()
+        loss = -loss
         return x, det, loss
 
     def get_latent_variables(self, inp):
@@ -157,7 +200,7 @@ def pl_training_loop(train_data, test_data, dset_id):
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
-    model = RealNVP2D(layers=2)
+    model = RealNVP2D(layers=10)
     estimator = AutFlow2DEstimator(model)
     trainer = Trainer(max_epochs=epochs,
                       gradient_clip_val=1,
