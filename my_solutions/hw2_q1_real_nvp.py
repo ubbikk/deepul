@@ -1,12 +1,9 @@
+import torch
 from pytorch_lightning import LightningModule, Trainer
-from torch.utils.tensorboard import SummaryWriter
+from torch.distributions.normal import Normal
+from torch.utils.data import Dataset, DataLoader
 
 from deepul.hw2_helper import *
-from torch.utils.data import Dataset, DataLoader
-import torch
-from torch.distributions import normal, mixture_same_family, uniform, logistic_normal
-from torch.distributions.normal import Normal
-from torch.nn import MultiheadAttention, Transformer
 
 # import deepul.pytorch_util as ptu
 
@@ -39,78 +36,79 @@ class Pairs(Dataset):
         return self.data[item]
 
 
-class NormalizingFlowOfCdfs(torch.nn.Module):
-    def __init__(self, mixture_dim=5):
+class CouplingLayer2D(torch.nn.Module):
+    def __init__(self, inplace=0):
         super().__init__()
-        self.mixture_dim = mixture_dim
-        self.mixture_weights = torch.nn.Parameter(torch.ones(mixture_dim, dtype=torch.float))
-        self.loc = torch.nn.Parameter(torch.zeros(mixture_dim, dtype=torch.float))
-        self.log_scale = torch.nn.Parameter(torch.ones(mixture_dim, dtype=torch.float))
-        torch.nn.init.uniform(self.loc.data)
-        torch.nn.init.uniform(self.log_scale.data)
+        self.inplace = inplace
+        self.scale = torch.nn.Parameter(torch.zeros(1))
+        self.scale_shift = torch.nn.Parameter(torch.zeros(1))
+        self.g_scale = torch.nn.Parameter(torch.zeros(1))
+        self.g_shift = torch.nn.Parameter(torch.zeros(1))
 
-    def forward(self, x):
-        weights = torch.softmax(self.mixture_weights, dim=0)
-        dist = Normal(self.loc, self.log_scale.exp())
-        z = dist.cdf(x) @ weights
-        # z = z.detach()
-        dz = dist.log_prob(x).exp() @ weights
-        return z, dz
+        self.scale.data.normal_(mean=0.0, std=0.02)
+        self.scale_shift.data.normal_(mean=0.0, std=0.02)
+        self.g_scale.data.normal_(mean=0.0, std=0.02)
+        self.g_shift.data.normal_(mean=0.0, std=0.02)
+
+    def forward(self, inp):
+        x1, x2 = torch.chunk(inp, chunks=2, dim=1)
+
+        if self.inplace == 0:
+            z1 = x1
+            log_scale = self.scale * torch.tanh(self.g_scale * x1) + self.scale_shift
+            z2 = torch.exp(log_scale) * x2 + self.g_shift
+
+            return torch.cat([z1, z2], dim=1), log_scale
+        else:
+            z2 = x2
+            log_scale = self.scale * torch.tanh(self.g_scale * x2) + self.scale_shift
+            z1 = torch.exp(log_scale) * x1 + self.g_shift
+
+            return torch.cat([z1, z2], dim=1), log_scale
+
+    def invert(self, inp):
+        with torch.no_grad():
+            z1, z2 = torch.chunk(inp, chunks=2, dim=1)
+            if self.inplace == 0:
+                x1 = z1
+                log_scale = self.scale * torch.tanh(self.g_scale * x1) + self.scale_shift
+                x2 = (z2 - self.g_shift) * torch.exp(-log_scale)
+            else:
+                x2 = z2
+                log_scale = self.scale * torch.tanh(self.g_scale * x2) + self.scale_shift
+                x1 = (z1 - self.g_shift) * torch.exp(-log_scale)
+
+            return torch.cat([x1, x2], dim=1)
 
 
-class AutoregressiveNormalizingFlow2D(torch.nn.Module):
-    def __init__(self, mixture_dim=5):
+class RealNVP2D(torch.nn.Module):
+    def __init__(self, layers=2):
         super().__init__()
-        self.mixture_dim = mixture_dim
-        self.flow1 = NormalizingFlowOfCdfs(mixture_dim)
+        inversions = [0, 1] * (layers // 2)
+        self.layers = torch.nn.ModuleList([CouplingLayer2D(i) for i in inversions])
+        self.d = Normal(0, 1)
 
-        self.mlp = torch.nn.Sequential(
-            torch.nn.Linear(1, 64),
-            torch.nn.ReLU(),
-            torch.nn.Linear(64, 32),
-            torch.nn.ReLU(),
-            torch.nn.Linear(32, 3 * mixture_dim)
-        )
+    def forward(self, inp):
+        det = 0
+        x = inp
+        for l in self.layers:
+            z, dz = l(x)
+            det += dz
+            x = z
 
-    def get_outputs(self, inp):
-        inp = inp.float()
-
-        x1, x2 = torch.chunk(inp, 2, dim=1)
-
-        z1, m1 = self.flow1(x1)
-
-        y = self.mlp(x1)
-        weights, loc, log_scale = torch.chunk(y, 3, dim=1)
-        scale = log_scale.exp()
-
-        weights = torch.softmax(weights, dim=1)
-        dist = Normal(loc, scale)
-        z2 = (dist.cdf(x2) * weights).sum(dim=1)
-        m2 = (dist.log_prob(x2).exp() * weights).sum(dim=1)
-
-        return z1, z2, m1, m2
-
-    def get_probs(self, inp):
-        z1, z2, m1, m2 = self.get_outputs(inp)
-
-        mask = (z1 >= 0) & (z1 <= 1)
-        m1 = torch.where(mask, m1, torch.tensor(1e-8))
-
-        mask = (z2 >= 0) & (z2 <= 1)
-        m2 = torch.where(mask, m2, torch.tensor(1e-8))
-
-        return torch.stack([m1, m2], dim=1)
+        loss = det.squeeze()
+        loss += self.d.log_prob(x).sum(dim=1)
+        loss = loss.mean()
+        return x, det, loss
 
     def get_latent_variables(self, inp):
         with torch.no_grad():
-            z1, z2, m1, m2 = self.get_outputs(inp)
-            z1 = z1.cpu().numpy()
-            z2 = z2.cpu().numpy()
-            return np.stack([z1, z2], axis=1)
+            z, dz, loss = self.forward(inp)
+            return z
 
-    def forward(self, inp):
-        probs = self.get_probs(inp)
-        return - probs.log().mean()
+    def get_probs(self, inp):
+        z, _, _ = self.forward(inp)
+        return self.d.log_prob(z).sum(dim=1).exp()
 
 
 class AutFlow2DEstimator(LightningModule):
@@ -121,16 +119,14 @@ class AutFlow2DEstimator(LightningModule):
         self.test_losses = []
 
     def training_step(self, batch, batch_idx):
-        preds = self.model(batch)
-        loss = preds.mean()
+        _, _, loss = self.model(batch)
         self.losses.append(loss.detach().cpu().numpy().item())
         self.log('train/loss', loss, prog_bar=True, logger=True)
 
         return loss
 
     def validation_step(self, batch, batch_idx):
-        preds = self.model(batch)
-        loss = preds.mean()
+        _, _, loss = self.model(batch)
         self.log('val/loss', loss)
 
         return loss
@@ -161,7 +157,7 @@ def pl_training_loop(train_data, test_data, dset_id):
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
-    model = AutoregressiveNormalizingFlow2D(mixture_dim=5)
+    model = RealNVP2D(layers=2)
     estimator = AutFlow2DEstimator(model)
     trainer = Trainer(max_epochs=epochs,
                       gradient_clip_val=1,
@@ -208,7 +204,8 @@ def plot_range(model, color, xs=(-2, -1), ys=(2, 3), sz=1000):
     # inp = torch.cartesian_prod(x,y)
 
     with torch.no_grad():
-        z1, z2, _, _ = model.get_outputs(points)
+        z, _, _ = model(points)
+        z1, z2 = torch.chunk(z, chunks=2, dim=1)
 
     plt.scatter(z1, z2, color=color, s=1)
 
@@ -238,7 +235,8 @@ def plot_transformation(model, cmap='hsv'):
     plt.scatter(x, y, c=colors, cmap=cmap, s=1)
 
     with torch.no_grad():
-        z1, z2, _, _ = model.get_outputs(torch.from_numpy(d))
+        z, _, _ = model(torch.from_numpy(d))
+        z1, z2 = torch.chunk(z, chunks=2, dim=1)
 
     plt.figure()
     plt.title('Latent Space')
@@ -282,7 +280,7 @@ def q1_a(train_data, test_data, dset_id):
 
     with torch.no_grad():
         probs = model.get_probs(mesh_xs)
-        densities = probs[:, 0] * probs[:, 1]
+        densities = probs
     # densities = np.exp(ptu.get_numpy(ar_flow.log_prob(mesh_xs)))
 
     # latents
@@ -292,7 +290,7 @@ def q1_a(train_data, test_data, dset_id):
 
 if __name__ == '__main__':
     seed_everything()
-    q1_save_results(2, 'a', q1_a)
+    q1_save_results(1, 'a', q1_a)
 
     plt.figure()
     plot_range(model, 'black', (-2, -1), (2, 3))
