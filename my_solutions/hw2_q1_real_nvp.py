@@ -141,7 +141,7 @@ class RealNVP2D(torch.nn.Module):
         loss = det.squeeze()
         loss += self.d.log_prob(x).sum(dim=1)
         loss = loss.mean()
-        loss = -loss
+        loss = -loss/2
         return x, det, loss
 
     def get_latent_variables(self, inp):
@@ -192,7 +192,7 @@ def pl_training_loop(train_data, test_data, dset_id):
     global train_losses, test_losses, densities, latents, model, estimator, trainer
 
     batch_size = 64
-    epochs = 50
+    epochs = 150
 
     train_ds = Pairs(train_data)
     test_ds = Pairs(test_data)
@@ -200,7 +200,7 @@ def pl_training_loop(train_data, test_data, dset_id):
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
-    model = RealNVP2D(layers=10)
+    model = RealNVP2D(layers=20)
     estimator = AutFlow2DEstimator(model)
     trainer = Trainer(max_epochs=epochs,
                       gradient_clip_val=1,
