@@ -92,12 +92,12 @@ class AutoregressiveNormalizingFlow2D(torch.nn.Module):
 
     def get_probs(self, inp):
         z1, z2, m1, m2 = self.get_outputs(inp)
-
-        mask = (z1 >= 0) & (z1 <= 1)
-        m1 = torch.where(mask, m1, torch.tensor(1e-8))
-
-        mask = (z2 >= 0) & (z2 <= 1)
-        m2 = torch.where(mask, m2, torch.tensor(1e-8))
+        #
+        # mask = (z1 >= 0) & (z1 <= 1)
+        # m1 = torch.where(mask, m1, torch.tensor(1e-8))
+        #
+        # mask = (z2 >= 0) & (z2 <= 1)
+        # m2 = torch.where(mask, m2, torch.tensor(1e-8))
 
         return torch.stack([m1, m2], dim=1)
 
@@ -153,7 +153,7 @@ def pl_training_loop(train_data, test_data, dset_id):
     global train_losses, test_losses, densities, latents, model, estimator, trainer
 
     batch_size = 64
-    epochs = 50
+    epochs = 250
 
     train_ds = Pairs(train_data)
     test_ds = Pairs(test_data)
@@ -292,7 +292,7 @@ def q1_a(train_data, test_data, dset_id):
 
 if __name__ == '__main__':
     seed_everything()
-    q1_save_results(2, 'a', q1_a)
+    q1_save_results(1, 'a', q1_a)
 
     plt.figure()
     plot_range(model, 'black', (-2, -1), (2, 3))
