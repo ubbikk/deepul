@@ -118,9 +118,34 @@ class PixelCnnFlow(torch.nn.Module):
 
         loss = - dz.log().mean() - log_pz.mean()
 
-        return z, dz, loss
+        return z, dz, (loc, log_scale, weight), loss
+
+    def bisection_search(self, z, loc, log_scale, weight):
+        """
+
+        :param z: input to invert (B, )
+        :param loc: (B, mixture_dim)
+        :param log_scale: (B, mixture_dim)
+        :param weight: (B, mixture_dim)
+        :return: x
+        """
+        B, mixture_dim = loc.shape
+        dist = Normal(loc, log_scale.exp())
+
+        space = torch.linspace(-100, 100, 10001)
+        space = space.repeat((B, mixture_dim, 1)).permute(2, 0, 1) # (1001, B, mixture_dim)
+
+        vals = dist.cdf(space)#(1001, B, mixture_dim)
+        vals = (vals*weight).sum(dim=-1) # (1001, B)
+        vals = vals.transpose(0, 1) # (B, 1001)
+
+        space = space[:, :, 0]
+        idx = torch.searchsorted(vals, z.reshape(B, 1))
+        x = space[idx]
 
     def generate_examples(self, sz=100):
+        if CUDA:
+            self.cuda()
         self.eval()
         with torch.no_grad():
             inp = torch.zeros((sz, self.H, self.W), dtype=torch.float).uniform_(0, 1)
@@ -128,11 +153,13 @@ class PixelCnnFlow(torch.nn.Module):
             self.pp = torch.zeros((sz, self.H, self.W), dtype=torch.float)
 
             for pos in range(self.H * self.W):
-                z, _, _ = self(inp.reshape(sz, 1, self.H, self.W))
-                probs = self.basic_distribution.log_prob(z).exp()
-                probs = probs.squeeze().cpu()
+                z, _, (loc, log_scale, weight), _ = self(inp.reshape(sz, 1, self.H, self.W))
                 i = pos // self.H
                 j = pos % self.H
+                x = self.bisection_search(z[:, i, j],
+                                          loc[:, i, j, :],
+                                          log_scale[:, i, j, :],
+                                          weight[:, i, j, :])
                 for b in range(sz):
                     p = probs[b, i, j].numpy().item()
                     inp[b, i, j] = sample_from_bernulli_distr(p)
@@ -149,14 +176,14 @@ class AutFlow2DEstimator(LightningModule):
         self.test_losses = []
 
     def training_step(self, batch, batch_idx):
-        _, _, loss = self.model(batch)
+        _, _, _, loss = self.model(batch)
         self.losses.append(loss.detach().cpu().numpy().item())
         self.log('train/loss', loss, prog_bar=True, logger=True)
 
         return loss
 
     def validation_step(self, batch, batch_idx):
-        _, _, loss = self.model(batch)
+        _, _, _, loss = self.model(batch)
         self.log('val/loss', loss)
 
         return loss
@@ -172,7 +199,6 @@ class AutFlow2DEstimator(LightningModule):
         # self.log('val/loss_after_epoch', loss, on_epoch=True, on_step=False)
         self.logger.log_metrics({'val/loss_after_epoch': loss},
                                 step=self.trainer.current_epoch)
-        return loss
 
 
 def pl_training_loop(train_data, test_data):
@@ -251,16 +277,19 @@ def q2(train_data, test_data):
 if __name__ == '__main__':
     os.chdir('/home/ubik/projects/')
     seed_everything()
-    q2_save_results(q2)
+    # q2_save_results(q2)
 
-    # os.chdir('/home/ubik/projects/deepul/')
-    # fp = '/home/ubik/projects/deepul/homeworks/hw1/data/hw1_data/shapes.pkl'
-    # H, W = 20, 20
-    # train_data, test_data = load_pickled_data(fp)
-    #
-    # dset = 1
-    #
-    # model = PixelCnnFlow(H, W, debug=True)
-    #
-    # x = torch.ones((8, 1, H, W)).float()
-    # y = model(x)
+    os.chdir('/home/ubik/projects/deepul/')
+    fp = '/home/ubik/projects/deepul/homeworks/hw1/data/hw1_data/shapes.pkl'
+    H, W = 20, 20
+    train_data, test_data = load_pickled_data(fp)
+
+    dset = 1
+
+    model = PixelCnnFlow(H, W, debug=True)
+
+    x = torch.ones((8, 1, H, W)).float()
+    x[1] = 0
+    y = model(x)
+
+    examples = model.generate_examples()
