@@ -132,16 +132,18 @@ class PixelCnnFlow(torch.nn.Module):
         B, mixture_dim = loc.shape
         dist = Normal(loc, log_scale.exp())
 
-        space = torch.linspace(-100, 100, 10001)
+        space = torch.linspace(-10, 10, 10001)
         space = space.repeat((B, mixture_dim, 1)).permute(2, 0, 1) # (1001, B, mixture_dim)
 
         vals = dist.cdf(space)#(1001, B, mixture_dim)
         vals = (vals*weight).sum(dim=-1) # (1001, B)
         vals = vals.transpose(0, 1) # (B, 1001)
 
-        space = space[:, :, 0]
-        idx = torch.searchsorted(vals, z.reshape(B, 1))
+        space = space[:, 0, 0]
+        idx = torch.searchsorted(vals, z.reshape(B, 1)).squeeze()
         x = space[idx]
+
+        return x
 
     def generate_examples(self, sz=100):
         if CUDA:
@@ -150,7 +152,6 @@ class PixelCnnFlow(torch.nn.Module):
         with torch.no_grad():
             inp = torch.zeros((sz, self.H, self.W), dtype=torch.float).uniform_(0, 1)
             inp = to_cuda(inp)
-            self.pp = torch.zeros((sz, self.H, self.W), dtype=torch.float)
 
             for pos in range(self.H * self.W):
                 z, _, (loc, log_scale, weight), _ = self(inp.reshape(sz, 1, self.H, self.W))
@@ -160,10 +161,7 @@ class PixelCnnFlow(torch.nn.Module):
                                           loc[:, i, j, :],
                                           log_scale[:, i, j, :],
                                           weight[:, i, j, :])
-                for b in range(sz):
-                    p = probs[b, i, j].numpy().item()
-                    inp[b, i, j] = sample_from_bernulli_distr(p)
-                    self.pp[b, i, j] = p
+                inp[:, i, j] = x
 
             return inp.reshape((sz, self.H, self.W, 1)).cpu().numpy()
 
