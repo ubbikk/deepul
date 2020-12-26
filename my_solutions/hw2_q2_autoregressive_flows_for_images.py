@@ -133,11 +133,13 @@ class PixelCnnFlow(torch.nn.Module):
         dist = Normal(loc, log_scale.exp())
 
         space = torch.linspace(-10, 10, 10001)
-        space = space.repeat((B, mixture_dim, 1)).permute(2, 0, 1) # (1001, B, mixture_dim)
+        if CUDA:
+            space = space.cuda()
+        space = space.repeat((B, mixture_dim, 1)).permute(2, 0, 1)  # (1001, B, mixture_dim)
 
-        vals = dist.cdf(space)#(1001, B, mixture_dim)
-        vals = (vals*weight).sum(dim=-1) # (1001, B)
-        vals = vals.transpose(0, 1) # (B, 1001)
+        vals = dist.cdf(space)  # (1001, B, mixture_dim)
+        vals = (vals * weight).sum(dim=-1)  # (1001, B)
+        vals = vals.transpose(0, 1)  # (B, 1001)
 
         space = space[:, 0, 0]
         idx = torch.searchsorted(vals, z.reshape(B, 1)).squeeze()
@@ -221,8 +223,8 @@ def pl_training_loop(train_data, test_data):
                       # limit_train_batches=3,
                       # limit_val_batches=3,
                       check_val_every_n_epoch=1,
-                      num_sanity_val_steps=0
-                      # logger=CustomLogger()
+                      num_sanity_val_steps=0,
+                      progress_bar_refresh_rate=100,
                       )
     trainer.fit(estimator,
                 train_dataloader=train_loader,
