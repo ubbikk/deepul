@@ -118,6 +118,10 @@ class PixelCnnFlow(torch.nn.Module):
 
         loss = - dz.log().mean() - log_pz.mean()
 
+        if torch.isnan(loss).tolist() or torch.isinf(loss).tolist():
+            print('blja')
+            print()
+
         return z, dz, (loc, log_scale, weight), loss
 
     def bisection_search(self, z, loc, log_scale, weight):
@@ -224,7 +228,7 @@ def pl_training_loop(train_data, test_data):
                       # limit_val_batches=3,
                       check_val_every_n_epoch=1,
                       num_sanity_val_steps=0,
-                      progress_bar_refresh_rate=100,
+                      # progress_bar_refresh_rate=100,
                       )
     trainer.fit(estimator,
                 train_dataloader=train_loader,
@@ -275,21 +279,26 @@ def q2(train_data, test_data):
 
 
 if __name__ == '__main__':
+    torch.autograd.detect_anomaly()
     os.chdir('/home/ubik/projects/')
-    seed_everything()
-    # q2_save_results(q2)
+    seed_everything(1)
+    q2_save_results(q2)
 
-    os.chdir('/home/ubik/projects/deepul/')
-    fp = '/home/ubik/projects/deepul/homeworks/hw1/data/hw1_data/shapes.pkl'
-    H, W = 20, 20
-    train_data, test_data = load_pickled_data(fp)
+    # os.chdir('/home/ubik/projects/deepul/')
+    # fp = '/home/ubik/projects/deepul/homeworks/hw1/data/hw1_data/shapes.pkl'
+    # H, W = 20, 20
+    # train_data, test_data = load_pickled_data(fp)
+    #
+    # dset = 1
+    #
+    # model = PixelCnnFlow(H, W, debug=True)
+    #
+    # x = torch.ones((8, 1, H, W)).float()
+    # x[1] = 0
+    # y = model(x)
+    #
+    # examples = model.generate_examples()
 
-    dset = 1
-
-    model = PixelCnnFlow(H, W, debug=True)
-
-    x = torch.ones((8, 1, H, W)).float()
-    x[1] = 0
-    y = model(x)
-
-    examples = model.generate_examples()
+    # n = Normal(dist.loc[0, 13, -1, 0].detach(), dist.scale[0, 13, -1, 0].detach())
+    # orig[0, 13, -1, 0]
+    # n.log_prob(0.5070).exp()
