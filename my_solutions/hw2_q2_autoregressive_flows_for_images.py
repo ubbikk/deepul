@@ -116,6 +116,8 @@ class PixelCnnFlow(torch.nn.Module):
         dz = (dist.log_prob(orig).exp() * weight).sum(dim=-1)
         log_pz = self.basic_distribution.log_prob(z)
 
+        dz+=1e-8
+
         loss = - dz.log().mean() - log_pz.mean()
 
         if torch.isnan(loss).tolist() or torch.isinf(loss).tolist():
