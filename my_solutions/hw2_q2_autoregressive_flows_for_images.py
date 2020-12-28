@@ -39,10 +39,6 @@ def dequantize(x):
     return x + delta
 
 
-def sample_from_bernulli_distr(p):
-    return np.random.binomial(1, p, 1).item()
-
-
 def get_conv_mask(sz, type='A'):
     res = np.ones(sz * sz)
     if type == 'A':
@@ -230,7 +226,7 @@ def pl_training_loop(train_data, test_data):
                       # limit_val_batches=3,
                       check_val_every_n_epoch=1,
                       num_sanity_val_steps=0,
-                      # progress_bar_refresh_rate=100,
+                      progress_bar_refresh_rate=100,
                       )
     trainer.fit(estimator,
                 train_dataloader=train_loader,
