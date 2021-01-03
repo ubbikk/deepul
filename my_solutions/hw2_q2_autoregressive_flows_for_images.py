@@ -170,6 +170,18 @@ class PixelCnnFlow(torch.nn.Module):
             return inp.reshape((sz, self.H, self.W, 1)).cpu().numpy()
 
 
+def check_bisection_search(z, x, loc, log_scale, weight, i, j):
+    d = Normal(loc[:, i, j, :], log_scale[:, i, j, :].exp())
+    w = weight[:, i, j, :]
+    z1 = z[:, i, j]
+
+    X = x.repeat((5, 1)).permute(1, 0)
+    y = d.cdf(X)
+    bl = (y * w).sum(dim=1)
+
+    return z1, bl
+
+
 class AutFlow2DEstimator(LightningModule):
     def __init__(self, model, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -186,7 +198,8 @@ class AutFlow2DEstimator(LightningModule):
 
     def validation_step(self, batch, batch_idx):
         _, _, _, loss = self.model(batch)
-        self.log('val/loss', loss)
+        self.test_losses.append(loss.detach().cpu().numpy().item())
+        self.log('val/loss', loss, on_step=True)
 
         return loss
 
@@ -207,7 +220,7 @@ def pl_training_loop(train_data, test_data):
     global train_losses, test_losses, model, estimator, trainer
 
     batch_size = 64
-    epochs = 5
+    epochs = 1
 
     sz, H, W, C = train_data.shape
 
@@ -226,7 +239,7 @@ def pl_training_loop(train_data, test_data):
                       # limit_val_batches=3,
                       check_val_every_n_epoch=1,
                       num_sanity_val_steps=0,
-                      progress_bar_refresh_rate=100,
+                      progress_bar_refresh_rate=10,
                       )
     trainer.fit(estimator,
                 train_dataloader=train_loader,
@@ -242,6 +255,8 @@ model = None
 trainer = None
 estimator = None
 train_losses, test_losses = None, None
+examples = None
+train_d, test_d = None, None
 
 
 def to_cuda(batch):
@@ -268,7 +283,10 @@ def q2(train_data, test_data):
         and [0.5,1] represents a white pixel. We will show your samples with and without noise.
     """
 
-    global train_losses, test_losses, model
+    global train_losses, test_losses, model, examples, train_d, test_d
+
+    train_d = train_data
+    test_d = test_data
 
     train_losses, test_losses, model = pl_training_loop(train_data, test_data)
     examples = model.generate_examples()
@@ -290,6 +308,7 @@ if __name__ == '__main__':
     # dset = 1
     #
     # model = PixelCnnFlow(H, W, debug=True)
+    # examples = model.generate_examples()
     #
     # x = torch.ones((8, 1, H, W)).float()
     # x[1] = 0
