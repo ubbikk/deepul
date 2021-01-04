@@ -155,14 +155,17 @@ class PixelCnnFlow(torch.nn.Module):
             self.cuda()
         self.eval()
         with torch.no_grad():
-            inp = torch.zeros((sz, self.H, self.W), dtype=torch.float).uniform_(0, 1)
+            inp = torch.zeros((sz, self.H, self.W), dtype=torch.float)#.uniform_(0, 1)
             inp = to_cuda(inp)
+
+            Z = self.basic_distribution.sample((sz, self.H, self.W))
+            Z = to_cuda(Z)
 
             for pos in range(self.H * self.W):
                 z, _, (loc, log_scale, weight), _ = self(inp.reshape(sz, 1, self.H, self.W))
                 i = pos // self.H
                 j = pos % self.H
-                x = self.bisection_search(z[:, i, j],
+                x = self.bisection_search(Z[:, i, j],
                                           loc[:, i, j, :],
                                           log_scale[:, i, j, :],
                                           weight[:, i, j, :])
