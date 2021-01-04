@@ -6,6 +6,7 @@ from torch.utils.data import Dataset, DataLoader
 from deepul.hw2_helper import *
 
 CUDA = torch.cuda.is_available()
+torch.autograd.detect_anomaly()
 
 
 def seed_everything(seed=0):
@@ -94,7 +95,7 @@ class PixelCnnFlow(torch.nn.Module):
 
     def forward(self, *inp):
         x = inp[0].float()
-        x = dequantize(x)
+        # x = dequantize(x)
         orig = x.permute(0, 2, 3, 1)
 
         b, c, H, W = x.shape
@@ -118,7 +119,7 @@ class PixelCnnFlow(torch.nn.Module):
 
         if torch.isnan(loss).tolist() or torch.isinf(loss).tolist():
             print('blja')
-            print()
+            print(loss)
 
         return z, dz, (loc, log_scale, weight), loss
 
@@ -179,7 +180,7 @@ def check_bisection_search(z, x, loc, log_scale, weight, i, j):
     y = d.cdf(X)
     bl = (y * w).sum(dim=1)
 
-    return z1, bl
+    return z1, bl, (z1-bl).abs().max()
 
 
 class AutFlow2DEstimator(LightningModule):
@@ -190,6 +191,7 @@ class AutFlow2DEstimator(LightningModule):
         self.test_losses = []
 
     def training_step(self, batch, batch_idx):
+        batch= dequantize(batch.float())
         _, _, _, loss = self.model(batch)
         self.losses.append(loss.detach().cpu().numpy().item())
         self.log('train/loss', loss, prog_bar=True, logger=True)
@@ -197,6 +199,7 @@ class AutFlow2DEstimator(LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
+        batch = dequantize(batch.float())
         _, _, _, loss = self.model(batch)
         self.test_losses.append(loss.detach().cpu().numpy().item())
         self.log('val/loss', loss, on_step=True)
@@ -295,7 +298,7 @@ def q2(train_data, test_data):
 
 
 if __name__ == '__main__':
-    torch.autograd.detect_anomaly()
+
     os.chdir('/home/ubik/projects/')
     seed_everything(1)
     q2_save_results(q2)
