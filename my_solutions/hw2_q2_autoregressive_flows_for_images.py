@@ -1,6 +1,7 @@
 import torch
 from pytorch_lightning import LightningModule, Trainer
 from torch.distributions.normal import Normal
+from torch.distributions.uniform import Uniform
 from torch.utils.data import Dataset, DataLoader
 
 from deepul.hw2_helper import *
@@ -91,7 +92,7 @@ class PixelCnnFlow(torch.nn.Module):
         self.convs = torch.nn.ModuleList(convs)
         self.fc = torch.nn.Linear(in_features=64, out_features=3 * self.mixture_dim)
 
-        self.basic_distribution = Normal(0, 1)
+        self.basic_distribution = Uniform(0, 1)
 
     def forward(self, *inp):
         x = inp[0].float()
@@ -111,9 +112,10 @@ class PixelCnnFlow(torch.nn.Module):
 
         z = (dist.cdf(orig) * weight).sum(dim=-1)
         dz = (dist.log_prob(orig).exp() * weight).sum(dim=-1)
-        log_pz = self.basic_distribution.log_prob(z)
+        # log_pz = self.basic_distribution.log_prob(z)
+        log_pz = -1000_000 * (((z > 1) ^ (z < 0)).float().mean())
 
-        dz+=1e-8
+        dz += 1e-8
 
         loss = - dz.log().mean() - log_pz.mean()
 
@@ -135,7 +137,8 @@ class PixelCnnFlow(torch.nn.Module):
         B, mixture_dim = loc.shape
         dist = Normal(loc, log_scale.exp())
 
-        space = torch.linspace(-10, 10, 10001)
+        sz = 10_000
+        space = torch.linspace(-10, 10, sz + 1)
         if CUDA:
             space = space.cuda()
         space = space.repeat((B, mixture_dim, 1)).permute(2, 0, 1)  # (1001, B, mixture_dim)
@@ -146,6 +149,7 @@ class PixelCnnFlow(torch.nn.Module):
 
         space = space[:, 0, 0]
         idx = torch.searchsorted(vals, z.reshape(B, 1)).squeeze()
+        idx[idx > sz] = sz
         x = space[idx]
 
         return x
@@ -155,7 +159,7 @@ class PixelCnnFlow(torch.nn.Module):
             self.cuda()
         self.eval()
         with torch.no_grad():
-            inp = torch.zeros((sz, self.H, self.W), dtype=torch.float)#.uniform_(0, 1)
+            inp = torch.zeros((sz, self.H, self.W), dtype=torch.float)  # .uniform_(0, 1)
             inp = to_cuda(inp)
 
             Z = self.basic_distribution.sample((sz, self.H, self.W))
@@ -163,6 +167,8 @@ class PixelCnnFlow(torch.nn.Module):
 
             for pos in range(self.H * self.W):
                 z, _, (loc, log_scale, weight), _ = self(inp.reshape(sz, 1, self.H, self.W))
+                if pos == 0:
+                    z_prev = z
                 i = pos // self.H
                 j = pos % self.H
                 x = self.bisection_search(Z[:, i, j],
@@ -170,6 +176,9 @@ class PixelCnnFlow(torch.nn.Module):
                                           log_scale[:, i, j, :],
                                           weight[:, i, j, :])
                 inp[:, i, j] = x
+
+            self.z = z
+            self.Z = Z
 
             return inp.reshape((sz, self.H, self.W, 1)).cpu().numpy()
 
@@ -183,7 +192,7 @@ def check_bisection_search(z, x, loc, log_scale, weight, i, j):
     y = d.cdf(X)
     bl = (y * w).sum(dim=1)
 
-    return z1, bl, (z1-bl).abs().max()
+    return z1, bl, (z1 - bl).abs().max()
 
 
 class AutFlow2DEstimator(LightningModule):
@@ -194,7 +203,7 @@ class AutFlow2DEstimator(LightningModule):
         self.test_losses = []
 
     def training_step(self, batch, batch_idx):
-        batch= dequantize(batch.float())
+        batch = dequantize(batch.float())
         _, _, _, loss = self.model(batch)
         self.losses.append(loss.detach().cpu().numpy().item())
         self.log('train/loss', loss, prog_bar=True, logger=True)
@@ -226,7 +235,7 @@ def pl_training_loop(train_data, test_data):
     global train_losses, test_losses, model, estimator, trainer
 
     batch_size = 64
-    epochs = 1
+    epochs = 5
 
     sz, H, W, C = train_data.shape
 
@@ -301,7 +310,6 @@ def q2(train_data, test_data):
 
 
 if __name__ == '__main__':
-
     os.chdir('/home/ubik/projects/')
     seed_everything(1)
     q2_save_results(q2)
@@ -314,14 +322,16 @@ if __name__ == '__main__':
     # dset = 1
     #
     # model = PixelCnnFlow(H, W, debug=True)
-    # examples = model.generate_examples()
-    #
-    # x = torch.ones((8, 1, H, W)).float()
-    # x[1] = 0
-    # y = model(x)
-    #
-    # examples = model.generate_examples()
+    # examples = model.generate_examples(10)
+    # with torch.no_grad():
+    #     for i in range(5):
+    #         w = torch.zeros((100, 1, H, W), dtype=torch.float).uniform_(0, 1)
+    #         z = model(w)[0]
+    #         print(z[0, 0, 0])
 
-    # n = Normal(dist.loc[0, 13, -1, 0].detach(), dist.scale[0, 13, -1, 0].detach())
-    # orig[0, 13, -1, 0]
-    # n.log_prob(0.5070).exp()
+    # from torch.distributions.normal import Normal
+    # import torch
+    #
+    # d = Normal(torch.FloatTensor([0.8106]), torch.FloatTensor([0.1311]))
+    # d.log_prob(torch.FloatTensor([0.7173]))
+
