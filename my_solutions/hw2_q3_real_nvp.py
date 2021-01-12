@@ -86,7 +86,7 @@ class AffineCouplingLayer(torch.nn.Module):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.resnet = SimpleResnet(in_channels=in_channels, out_channels=2*self.out_channels)  # ?
+        self.resnet = SimpleResnet(in_channels=in_channels, out_channels=2 * self.out_channels)  # ?
         self.scale = torch.nn.Parameter(torch.ones(1))
         self.scale_shift = torch.nn.Parameter(torch.zeros(1))
 
@@ -109,7 +109,7 @@ class AffineCouplingLayer(torch.nn.Module):
             t = t * (1.0 - mask)
             log_scale = log_scale * (1.0 - mask)
 
-            x = (z-t)*torch.exp(-log_scale)
+            x = (z - t) * torch.exp(-log_scale)
 
             return x
 
@@ -145,6 +145,24 @@ def logit_smoothing():
     plt.plot(x[[0, -1]], y[[0, -1]])
 
     plt.legend(['logit', 'linear'])
+
+
+def mask_for_checkboard_coupling(H=32, white=True):
+    idx = torch.arange(H ** 2).reshape(H, H)
+    x = idx // H
+    y = idx % H
+
+    x = x // 4
+    y = y // 4
+
+    mask = (x + y) % 2
+
+    mask = mask.float()
+
+    if white:
+        return 1-mask
+    else:
+        return mask
 
 
 if __name__ == '__main__':
