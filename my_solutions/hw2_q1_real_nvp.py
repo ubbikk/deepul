@@ -80,6 +80,7 @@ class SimpleCouplingLayer2D(torch.nn.Module):
 
             return torch.cat([x1, x2], dim=1)
 
+
 class MlpCouplingLayer2D(torch.nn.Module):
     def __init__(self, inplace=0):
         super().__init__()
@@ -141,7 +142,7 @@ class RealNVP2D(torch.nn.Module):
         loss = det.squeeze()
         loss += self.d.log_prob(x).sum(dim=1)
         loss = loss.mean()
-        loss = -loss/2
+        loss = -loss / 2
         return x, det, loss
 
     def get_latent_variables(self, inp):
