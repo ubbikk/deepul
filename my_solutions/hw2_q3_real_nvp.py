@@ -84,11 +84,11 @@ class AffineCouplingLayer(torch.nn.Module):
     def __init__(self):
         super().__init__()
         # self.register_buffer('mask', mask)
-        self.resnet = SimpleResnet(in_channels=3, out_channels=3) # ?
+        self.resnet = SimpleResnet(in_channels=3, out_channels=3*2) # ?
 
     def forward(self, x, mask):
         x_ = x * mask
-        log_s, t = torch.chunk(self.resnet(x_), 2, dim=1)
+        log_s, t = torch.chunk(self.resnet(x * mask), 2, dim=1)
         # calculate log_scale, as done in Q1(b)
         t = t * (1.0 - mask)
         log_scale = log_scale * (1.0 - mask)

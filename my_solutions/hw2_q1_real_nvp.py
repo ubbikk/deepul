@@ -192,7 +192,7 @@ def pl_training_loop(train_data, test_data, dset_id):
     global train_losses, test_losses, densities, latents, model, estimator, trainer
 
     batch_size = 64
-    epochs = 150
+    epochs = 100
 
     train_ds = Pairs(train_data)
     test_ds = Pairs(test_data)
@@ -204,12 +204,12 @@ def pl_training_loop(train_data, test_data, dset_id):
     estimator = AutFlow2DEstimator(model)
     trainer = Trainer(max_epochs=epochs,
                       gradient_clip_val=1,
-                      # gpus=1,
+                      gpus=int(CUDA),
                       # limit_train_batches=3,
                       # limit_val_batches=3,
                       check_val_every_n_epoch=1,
-                      num_sanity_val_steps=0
-                      # logger=CustomLogger()
+                      num_sanity_val_steps=0,
+                      progress_bar_refresh_rate=5 if CUDA else 20,
                       )
     trainer.fit(estimator,
                 train_dataloader=train_loader,
@@ -286,7 +286,7 @@ def plot_transformation(model, cmap='hsv'):
     plt.scatter(z1, z2, c=colors, cmap=cmap, s=1)
 
 
-def q1_a(train_data, test_data, dset_id):
+def q1_b(train_data, test_data, dset_id):
     """
   train_data: An (n_train, 2) numpy array of floats in R^2
   test_data: An (n_test, 2) numpy array of floats in R^2
@@ -322,18 +322,17 @@ def q1_a(train_data, test_data, dset_id):
     mesh_xs = to_cuda(mesh_xs)
 
     with torch.no_grad():
+        if CUDA:
+            model.cuda()
         probs = model.get_probs(mesh_xs)
-        densities = probs
-    # densities = np.exp(ptu.get_numpy(ar_flow.log_prob(mesh_xs)))
-
-    # latents
+        densities = probs.cpu()
 
     return train_losses, test_losses, densities, latents
 
 
 if __name__ == '__main__':
     seed_everything()
-    q1_save_results(1, 'a', q1_a)
+    q1_save_results(1, 'b', q1_b)
 
     plt.figure()
     plot_range(model, 'black', (-2, -1), (2, 3))
