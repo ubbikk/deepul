@@ -114,6 +114,34 @@ class AffineCouplingLayer(torch.nn.Module):
             return x
 
 
+def squeeze(inp):
+    H = inp.shape[0]
+    c = inp.shape[-1]
+
+    a = torch.LongTensor([[1, 2], [3, 4]])
+    idx = a.repeat(H // 2, H // 2)
+
+    pp = [inp[idx == i].reshape(H // 2, H // 2, c) for i in range(1, 5)]
+
+    res = torch.stack(pp, dim=2)
+
+
+def test_squeeze():
+    seed_everything()
+    inp = torch.rand(8, 8, 3)
+
+    H = inp.shape[0]
+    c = inp.shape[-1]
+
+    a = torch.LongTensor([[1, 2], [3, 4]])
+    idx = a.repeat(H // 2, H // 2)
+
+    pp = [inp[idx == i].reshape(H // 2, H // 2, c) for i in range(1, 5)]
+    pp = pp[::-1]
+
+    res = torch.cat(pp, dim=2)
+
+
 def q3_a(train_data, test_data):
     """
     train_data: A (n_train, H, W, 3) uint8 numpy array of quantized images with values in {0, 1, 2, 3}
@@ -152,15 +180,12 @@ def mask_for_checkboard_coupling(H=32, white=True):
     x = idx // H
     y = idx % H
 
-    x = x // 4
-    y = y // 4
-
     mask = (x + y) % 2
 
     mask = mask.float()
 
     if white:
-        return 1-mask
+        return 1 - mask
     else:
         return mask
 
