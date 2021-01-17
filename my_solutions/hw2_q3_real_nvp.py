@@ -116,18 +116,42 @@ class AffineCouplingLayer(torch.nn.Module):
 
 def squeeze(inp):
     H = inp.shape[0]
-    c = inp.shape[-1]
+    C = inp.shape[-1]
 
     a = torch.LongTensor([[1, 2], [3, 4]])
     idx = a.repeat(H // 2, H // 2)
 
-    pp = [inp[idx == i].reshape(H // 2, H // 2, c) for i in range(1, 5)]
+    pp = [inp[idx == i].reshape(H // 2, H // 2, C) for i in range(1, 5)]
+    pp = pp[::-1]
 
     res = torch.stack(pp, dim=2)
 
+    return res
+
+
+def unsqueeze(x):
+    h = x.shape[0]
+    c = x.shape[-1]
+
+    H = 2 * h
+    C = c // 4
+    res = torch.zeros(H, H, C)
+
+    a = torch.LongTensor([[1, 2], [3, 4]])
+    idx = a.repeat(H // 2, H // 2)
+    idx = torch.stack([idx] * 3, dim=-1)
+
+    res[idx == 4] = x[..., :3].flatten()
+    res[idx == 3] = x[..., 3:6].flatten()
+    res[idx == 2] = x[..., 6:9].flatten()
+    res[idx == 1] = x[..., 9:].flatten()
+
+    return res
+
 
 def test_squeeze():
-    seed_everything()
+    torch.manual_seed(0)
+
     inp = torch.rand(8, 8, 3)
 
     H = inp.shape[0]
