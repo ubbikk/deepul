@@ -124,7 +124,7 @@ def squeeze(inp):
     pp = [inp[idx == i].reshape(H // 2, H // 2, C) for i in range(1, 5)]
     pp = pp[::-1]
 
-    res = torch.stack(pp, dim=2)
+    res = torch.cat(pp, dim=2)
 
     return res
 
@@ -164,6 +164,17 @@ def test_squeeze():
     pp = pp[::-1]
 
     res = torch.cat(pp, dim=2)
+
+
+def test_squeeze_unsqueze():
+    torch.manual_seed(0)
+
+    inp = torch.rand(8, 8, 3)
+
+    s = squeeze(inp)
+    out = unsqueeze(s)
+
+    print((inp == out).all())
 
 
 def q3_a(train_data, test_data):
@@ -218,4 +229,6 @@ if __name__ == '__main__':
     os.chdir('/home/ubik/projects/')
     seed_everything(1)
     # q3_save_results(q3_a, 'a')
-    train_data, test_data = load_pickled_data('deepul/homeworks/hw2/data/celeb.pkl')
+    # train_data, test_data = load_pickled_data('deepul/homeworks/hw2/data/celeb.pkl')
+
+    test_squeeze_unsqueze()
