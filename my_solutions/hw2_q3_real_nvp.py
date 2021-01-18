@@ -149,32 +149,72 @@ def unsqueeze(x):
     return res
 
 
-def test_squeeze():
-    torch.manual_seed(0)
-
-    inp = torch.rand(8, 8, 3)
-
-    H = inp.shape[0]
-    c = inp.shape[-1]
-
-    a = torch.LongTensor([[1, 2], [3, 4]])
-    idx = a.repeat(H // 2, H // 2)
-
-    pp = [inp[idx == i].reshape(H // 2, H // 2, c) for i in range(1, 5)]
-    pp = pp[::-1]
-
-    res = torch.cat(pp, dim=2)
-
-
 def test_squeeze_unsqueze():
     torch.manual_seed(0)
 
     inp = torch.rand(8, 8, 3)
+    inp.requires_grad = True
 
     s = squeeze(inp)
     out = unsqueeze(s)
 
     print((inp == out).all())
+    print(out.requires_grad)
+
+
+def mask_for_checkerboard_coupling(H=32, C=3, white=True):
+    idx = torch.arange(H ** 2).reshape(H, H)
+    x = idx // H
+    y = idx % H
+
+    mask = (x + y) % 2
+
+    mask = mask.float()
+
+    if white:
+        mask = 1 - mask
+
+    return torch.stack([mask] * C, dim=-1)
+
+
+def mask_for_channel_coupling(h=16, c=12, white=True):
+    mask = torch.ones(h, h, c).float()
+    if white:
+        mask[..., :c // 2] = 0
+    else:
+        mask[..., c // 2:] = 0
+
+    return mask
+
+
+class RealNVP(torch.nn.Module):
+    def __init__(self, H=32, C=3):
+        super().__init__()
+        self.H = H
+        self.C = C
+
+        self.coupling_layers1 = torch.nn.ModuleList([AffineCouplingLayer(C, C)])
+        self.coupling_layers2 = torch.nn.ModuleList([AffineCouplingLayer(C * 4, C * 4)])
+        self.coupling_layers3 = torch.nn.ModuleList([AffineCouplingLayer(C, C)])
+
+        self.masks1 = [mask_for_checkerboard_coupling(H, C, w) for w in [True, False, True]]
+        self.masks2 = [mask_for_channel_coupling(H // 2, C * 4, w) for w in [True, False, True]]
+        self.masks3 = [mask_for_checkerboard_coupling(H, C, w) for w in [False, True, False]]
+
+    def forward(self, x):
+        for l, mask in zip(self.coupling_layers1, self.masks1):
+            x, jacobian = l(x, mask)
+        
+        x = squeeze(x)
+        
+        for l, mask in zip(self.coupling_layers2, self.masks2):
+            x, jacobian = l(x, mask)
+        
+        x = unsqueeze(x)
+        
+        for l, mask in zip(self.coupling_layers3, self.masks3):
+            x, jacobian = l(x, mask)
+        
 
 
 def q3_a(train_data, test_data):
@@ -208,21 +248,6 @@ def logit_smoothing():
     plt.plot(x[[0, -1]], y[[0, -1]])
 
     plt.legend(['logit', 'linear'])
-
-
-def mask_for_checkboard_coupling(H=32, white=True):
-    idx = torch.arange(H ** 2).reshape(H, H)
-    x = idx // H
-    y = idx % H
-
-    mask = (x + y) % 2
-
-    mask = mask.float()
-
-    if white:
-        return 1 - mask
-    else:
-        return mask
 
 
 if __name__ == '__main__':
