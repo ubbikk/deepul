@@ -82,32 +82,33 @@ class SimpleResnet(torch.nn.Module):
 
 
 class AffineCouplingLayer(torch.nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, mask, in_channels, out_channels):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.resnet = SimpleResnet(in_channels=in_channels, out_channels=2 * self.out_channels)  # ?
         self.scale = torch.nn.Parameter(torch.ones(1))
         self.scale_shift = torch.nn.Parameter(torch.zeros(1))
+        self.mask = self.register_buffer('mask', mask)
 
-    def forward(self, x, mask):
-        s, t = torch.chunk(self.resnet(x * mask), 2, dim=1)
+    def forward(self, x):
+        s, t = torch.chunk(self.resnet(x * self.mask), 2, dim=1)
         # calculate log_scale, as done in Q1(b)
         log_scale = self.scale * torch.tanh(s) + self.scale_shift
 
-        t = t * (1.0 - mask)
-        log_scale = log_scale * (1.0 - mask)
+        t = t * (1.0 - self.mask)
+        log_scale = log_scale * (1.0 - self.mask)
         z = x * torch.exp(log_scale) + t
         log_det_jacobian = log_scale
         return z, log_det_jacobian
 
-    def invert(self, z, mask):
+    def invert(self, z):
         with torch.no_grad():
-            s, t = torch.chunk(self.resnet(z * mask), 2, dim=1)
+            s, t = torch.chunk(self.resnet(z * self.mask), 2, dim=1)
             log_scale = self.scale * torch.tanh(s) + self.scale_shift
 
-            t = t * (1.0 - mask)
-            log_scale = log_scale * (1.0 - mask)
+            t = t * (1.0 - self.mask)
+            log_scale = log_scale * (1.0 - self.mask)
 
             x = (z - t) * torch.exp(-log_scale)
 
@@ -193,33 +194,54 @@ class RealNVP(torch.nn.Module):
         self.H = H
         self.C = C
 
-        self.coupling_layers1 = torch.nn.ModuleList([AffineCouplingLayer(C, C)])
-        self.coupling_layers2 = torch.nn.ModuleList([AffineCouplingLayer(C * 4, C * 4)])
-        self.coupling_layers3 = torch.nn.ModuleList([AffineCouplingLayer(C, C)])
+        masks1 = [mask_for_checkerboard_coupling(H, C, w) for w in [True, False, True]]
+        masks2 = [mask_for_channel_coupling(H // 2, C * 4, w) for w in [True, False, True]]
+        masks3 = [mask_for_checkerboard_coupling(H, C, w) for w in [False, True, False]]
 
-        self.masks1 = [mask_for_checkerboard_coupling(H, C, w) for w in [True, False, True]]
-        self.masks2 = [mask_for_channel_coupling(H // 2, C * 4, w) for w in [True, False, True]]
-        self.masks3 = [mask_for_checkerboard_coupling(H, C, w) for w in [False, True, False]]
+        self.coupling_layers1 = torch.nn.ModuleList([AffineCouplingLayer(mask, C, C) for mask in masks1])
+        self.coupling_layers2 = torch.nn.ModuleList([AffineCouplingLayer(mask, C * 4, C * 4) for mask in masks2])
+        self.coupling_layers3 = torch.nn.ModuleList([AffineCouplingLayer(mask, C, C) for mask in masks3])
 
     def forward(self, x):
-        for l, mask in zip(self.coupling_layers1, self.masks1):
-            x, jacobian = l(x, mask)
-        
+        dz = 0
+
+        for l in self.coupling_layers1:
+            x, jacobian = l(x)
+            dz +=jacobian.sum()
+
         x = squeeze(x)
-        
-        for l, mask in zip(self.coupling_layers2, self.masks2):
-            x, jacobian = l(x, mask)
-        
+
+        for l in self.coupling_layers2:
+            x, jacobian = l(x)
+            dz += jacobian.sum()
+
         x = unsqueeze(x)
-        
-        for l, mask in zip(self.coupling_layers3, self.masks3):
-            x, jacobian = l(x, mask)
+
+        for l in self.coupling_layers3:
+            x, jacobian = l(x)
+            dz += jacobian.sum()
 
         z = x
 
+        return z, dz
+
     def invert(self, z):
-        return x
-        
+        with torch.no_grad():
+            for l in self.coupling_layers3[::, -1]:
+                z, _ = l.invert(z)
+
+            z = squeeze(z)
+
+            for l in self.coupling_layers2[::, -1]:
+                z, _ = l.invert(z)
+
+            z = unsqueeze(z)
+
+            for l in self.coupling_layers1[::, -1]:
+                z, _ = l.invert(z)
+
+            return z
+
 
 
 def q3_a(train_data, test_data):
