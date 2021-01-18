@@ -214,6 +214,11 @@ class RealNVP(torch.nn.Module):
         
         for l, mask in zip(self.coupling_layers3, self.masks3):
             x, jacobian = l(x, mask)
+
+        z = x
+
+    def invert(self, z):
+        return x
         
 
 
