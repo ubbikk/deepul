@@ -99,7 +99,7 @@ class AffineCouplingLayer(torch.nn.Module):
         self.resnet = SimpleResnet(in_channels=in_channels, out_channels=2 * self.out_channels)  # ?
         self.scale = torch.nn.Parameter(torch.ones(1))
         self.scale_shift = torch.nn.Parameter(torch.zeros(1))
-        self.mask = self.register_buffer('mask', mask)
+        self.register_buffer('mask', mask)
 
     def forward(self, x):
         s, t = torch.chunk(self.resnet(x * self.mask), 2, dim=1)
