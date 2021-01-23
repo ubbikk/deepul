@@ -11,6 +11,16 @@ from deepul.hw2_helper import *
 CUDA = torch.cuda.is_available()
 torch.autograd.detect_anomaly()
 
+class CelebDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+
+    def __getitem__(self, item):
+        return self.data[item]
+
+    def __len__(self):
+        return len(self.data)
+
 
 def preprocess(x):
     x = x + torch.zeros(x.shape).uniform_(-0.5, 0.5)
@@ -242,7 +252,81 @@ class RealNVP(torch.nn.Module):
 
             return z
 
+    def generate_examples(self):
+        return torch.randint(0, 2, (100, 32, 32, 2)) # torch.rand(100, 32, 32, 2)
 
+
+class RealNvpEstimator(LightningModule):
+    def __init__(self, model, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.model = model
+        self.losses = []
+        self.test_losses = []
+
+    def training_step(self, batch, batch_idx):
+        batch = preprocess(batch.float())
+        _, loss = self.model(batch)
+        self.losses.append(loss.detach().cpu().numpy().item())
+        self.log('train/loss', loss, prog_bar=True, logger=True)
+
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        batch = preprocess(batch.float())
+        _, loss = self.model(batch)
+        self.test_losses.append(loss.detach().cpu().numpy().item())
+        self.log('val/loss', loss, on_step=True)
+
+        return loss
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
+        return optimizer
+
+    def validation_epoch_end(self, outputs):
+        ll = outputs
+        loss = torch.stack(ll).mean()
+        self.test_losses.append(loss.detach().cpu().numpy().item())
+
+
+model = None
+trainer = None
+estimator = None
+train_losses, test_losses = None, None
+examples = None
+train_d, test_d = None, None
+
+def pl_training_loop(train_data, test_data):
+    global train_losses, test_losses, model, estimator, trainer
+
+    batch_size = 6
+    epochs = 5
+
+    train_ds = CelebDataset(train_data)
+    test_ds = CelebDataset(test_data)
+
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
+
+    model = RealNVP()
+    estimator = RealNvpEstimator(model)
+    trainer = Trainer(max_epochs=epochs,
+                      gradient_clip_val=1,
+                      gpus=int(CUDA),
+                      # limit_train_batches=3,
+                      # limit_val_batches=3,
+                      check_val_every_n_epoch=1,
+                      num_sanity_val_steps=0,
+                      progress_bar_refresh_rate=10,
+                      )
+    trainer.fit(estimator,
+                train_dataloader=train_loader,
+                val_dataloaders=test_loader)
+
+    train_losses = np.array(estimator.losses)
+    test_losses = np.array(estimator.test_losses)
+
+    return train_losses, test_losses, estimator.model
 
 def q3_a(train_data, test_data):
     """
@@ -256,7 +340,17 @@ def q3_a(train_data, test_data):
     - a numpy array of size (30, H, W, 3) of interpolations with values in [0, 1].
     """
 
-    """ YOUR CODE HERE """
+    global train_losses, test_losses, model, examples, train_d, test_d
+
+    train_d = train_data
+    test_d = test_data
+
+    train_losses, test_losses, model = pl_training_loop(train_data, test_data)
+    examples = model.generate_examples()
+
+    interpolations = torch.randint(0, 2, (30, 32, 32, 2)) # torch.rand(30, 32, 32, 2)
+
+    return train_losses, test_losses, examples, interpolations
 
 
 def visualize(train_data, sz=1):
@@ -280,7 +374,7 @@ def logit_smoothing():
 if __name__ == '__main__':
     os.chdir('/home/ubik/projects/')
     seed_everything(1)
-    # q3_save_results(q3_a, 'a')
-    # train_data, test_data = load_pickled_data('deepul/homeworks/hw2/data/celeb.pkl')
+    q3_save_results(q3_a, 'a')
+    train_data, test_data = load_pickled_data('deepul/homeworks/hw2/data/celeb.pkl')
 
     test_squeeze_unsqueze()
