@@ -11,6 +11,7 @@ from deepul.hw2_helper import *
 CUDA = torch.cuda.is_available()
 torch.autograd.detect_anomaly()
 
+
 class CelebDataset(Dataset):
     def __init__(self, data):
         self.data = data
@@ -53,7 +54,7 @@ class ResnetBlock(torch.nn.Module):
         self.n_filters = n_filters
 
         self.conv1 = Conv2d(self.n_filters, self.n_filters, (1, 1), stride=1, padding=0)
-        self.conv2 = Conv2d(self.n_filters, self.n_filters, (3, 3), stride=1, padding=0)
+        self.conv2 = Conv2d(self.n_filters, self.n_filters, (3, 3), stride=1, padding=1)
         self.conv3 = Conv2d(self.n_filters, self.n_filters, (1, 1), stride=1, padding=0)
 
     def forward(self, x):
@@ -77,17 +78,19 @@ class SimpleResnet(torch.nn.Module):
         self.n_filters = n_filters
         self.n_blocks = n_blocks
 
-        self.conv1 = Conv2d(self.in_channels, self.n_filters, (3, 3), stride=1, padding=0)
-        self.conv2 = Conv2d(self.n_filters, self.out_channels, (3, 3), stride=1, padding=0)
+        self.conv1 = Conv2d(self.in_channels, self.n_filters, (3, 3), stride=1, padding=1)
+        self.conv2 = Conv2d(self.n_filters, self.out_channels, (3, 3), stride=1, padding=1)
 
         self.blocks = torch.nn.ModuleList([ResnetBlock(self.n_filters) for _ in range(self.n_blocks)])
 
     def forward(self, x):
+        x = x.permute(0, 3, 1, 2)
         x = self.conv1(x)
         for block in self.blocks:
             x = block(x)
         x = torch.relu(x)
         x = self.conv2(x)
+        x = x.permute(0, 2, 3, 1)
         return x
 
 
@@ -102,7 +105,7 @@ class AffineCouplingLayer(torch.nn.Module):
         self.register_buffer('mask', mask)
 
     def forward(self, x):
-        s, t = torch.chunk(self.resnet(x * self.mask), 2, dim=1)
+        s, t = torch.chunk(self.resnet(x * self.mask), 2, dim=-1)
         # calculate log_scale, as done in Q1(b)
         log_scale = self.scale * torch.tanh(s) + self.scale_shift
 
@@ -126,36 +129,45 @@ class AffineCouplingLayer(torch.nn.Module):
 
 
 def squeeze(inp):
-    H = inp.shape[0]
+    B = inp.shape[0]
+    H = inp.shape[1]
     C = inp.shape[-1]
 
     a = torch.LongTensor([[1, 2], [3, 4]])
     idx = a.repeat(H // 2, H // 2)
 
-    pp = [inp[idx == i].reshape(H // 2, H // 2, C) for i in range(1, 5)]
+    pp = [inp[(idx == i).repeat(B, 1, 1)].reshape(B, H // 2, H // 2, C) for i in range(1, 5)]
     pp = pp[::-1]
 
-    res = torch.cat(pp, dim=2)
+    res = torch.cat(pp, dim=3)
 
     return res
 
 
 def unsqueeze(x):
-    h = x.shape[0]
+    b = x.shape[0]
+    h = x.shape[1]
     c = x.shape[-1]
 
     H = 2 * h
     C = c // 4
-    res = torch.zeros(H, H, C)
+    res = torch.zeros(b, H, H, C)
 
     a = torch.LongTensor([[1, 2], [3, 4]])
     idx = a.repeat(H // 2, H // 2)
     idx = torch.stack([idx] * 3, dim=-1)
 
-    res[idx == 4] = x[..., :3].flatten()
-    res[idx == 3] = x[..., 3:6].flatten()
-    res[idx == 2] = x[..., 6:9].flatten()
-    res[idx == 1] = x[..., 9:].flatten()
+    mask = (idx == 4).repeat(b, 1, 1, 1)
+    res[mask] = x[..., :3].flatten()
+
+    mask = (idx == 3).repeat(b, 1, 1, 1)
+    res[mask] = x[..., 3:6].flatten()
+
+    mask = (idx == 2).repeat(b, 1, 1, 1)
+    res[mask] = x[..., 6:9].flatten()
+
+    mask = (idx == 1).repeat(b, 1, 1, 1)
+    res[mask] = x[..., 9:].flatten()
 
     return res
 
@@ -163,7 +175,7 @@ def unsqueeze(x):
 def test_squeeze_unsqueze():
     torch.manual_seed(0)
 
-    inp = torch.rand(8, 8, 3)
+    inp = torch.rand(10, 8, 8, 3)
     inp.requires_grad = True
 
     s = squeeze(inp)
@@ -217,7 +229,7 @@ class RealNVP(torch.nn.Module):
 
         for l in self.coupling_layers1:
             x, jacobian = l(x)
-            dz +=jacobian.sum()
+            dz += jacobian.sum()
 
         x = squeeze(x)
 
@@ -253,7 +265,7 @@ class RealNVP(torch.nn.Module):
             return z
 
     def generate_examples(self):
-        return torch.randint(0, 2, (100, 32, 32, 2)) # torch.rand(100, 32, 32, 2)
+        return torch.randint(0, 2, (100, 32, 32, 2))  # torch.rand(100, 32, 32, 2)
 
 
 class RealNvpEstimator(LightningModule):
@@ -296,10 +308,11 @@ train_losses, test_losses = None, None
 examples = None
 train_d, test_d = None, None
 
+
 def pl_training_loop(train_data, test_data):
     global train_losses, test_losses, model, estimator, trainer
 
-    batch_size = 6
+    batch_size = 10
     epochs = 5
 
     train_ds = CelebDataset(train_data)
@@ -328,6 +341,7 @@ def pl_training_loop(train_data, test_data):
 
     return train_losses, test_losses, estimator.model
 
+
 def q3_a(train_data, test_data):
     """
     train_data: A (n_train, H, W, 3) uint8 numpy array of quantized images with values in {0, 1, 2, 3}
@@ -348,7 +362,7 @@ def q3_a(train_data, test_data):
     train_losses, test_losses, model = pl_training_loop(train_data, test_data)
     examples = model.generate_examples()
 
-    interpolations = torch.randint(0, 2, (30, 32, 32, 2)) # torch.rand(30, 32, 32, 2)
+    interpolations = torch.randint(0, 2, (30, 32, 32, 2))  # torch.rand(30, 32, 32, 2)
 
     return train_losses, test_losses, examples, interpolations
 
@@ -374,7 +388,7 @@ def logit_smoothing():
 if __name__ == '__main__':
     os.chdir('/home/ubik/projects/')
     seed_everything(1)
-    q3_save_results(q3_a, 'a')
+    # q3_save_results(q3_a, 'a')
     train_data, test_data = load_pickled_data('deepul/homeworks/hw2/data/celeb.pkl')
 
     test_squeeze_unsqueze()
