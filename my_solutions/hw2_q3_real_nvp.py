@@ -22,9 +22,18 @@ class CelebDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
+def to_cuda(batch):
+    if not CUDA:
+        return batch
+
+    if isinstance(batch, torch.Tensor):
+        return batch.cuda()
+
+    return [b.cuda() for b in batch]
+
 
 def preprocess(x):
-    x = x + torch.zeros(x.shape).uniform_(-0.5, 0.5)
+    x = x + to_cuda(torch.zeros(x.shape).uniform_(-0.5, 0.5))
 
     mx = 4
     alfa = 0.05
@@ -152,21 +161,26 @@ def unsqueeze(x):
     H = 2 * h
     C = c // 4
     res = torch.zeros(b, H, H, C)
+    res = to_cuda(res)
 
     a = torch.LongTensor([[1, 2], [3, 4]])
     idx = a.repeat(H // 2, H // 2)
     idx = torch.stack([idx] * 3, dim=-1)
 
     mask = (idx == 4).repeat(b, 1, 1, 1)
+    mask = to_cuda(mask)
     res[mask] = x[..., :3].flatten()
 
     mask = (idx == 3).repeat(b, 1, 1, 1)
+    mask = to_cuda(mask)
     res[mask] = x[..., 3:6].flatten()
 
     mask = (idx == 2).repeat(b, 1, 1, 1)
+    mask = to_cuda(mask)
     res[mask] = x[..., 6:9].flatten()
 
     mask = (idx == 1).repeat(b, 1, 1, 1)
+    mask = to_cuda(mask)
     res[mask] = x[..., 9:].flatten()
 
     return res
@@ -385,10 +399,10 @@ def logit_smoothing():
     plt.legend(['logit', 'linear'])
 
 
-if __name__ == '__main__':
-    os.chdir('/home/ubik/projects/')
-    seed_everything(1)
-    # q3_save_results(q3_a, 'a')
-    train_data, test_data = load_pickled_data('deepul/homeworks/hw2/data/celeb.pkl')
-
-    test_squeeze_unsqueze()
+# if __name__ == '__main__':
+#     os.chdir('/home/ubik/projects/')
+#     seed_everything(1)
+#     q3_save_results(q3_a, 'a')
+#     train_data, test_data = load_pickled_data('deepul/homeworks/hw2/data/celeb.pkl')
+#
+#     test_squeeze_unsqueze()
